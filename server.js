@@ -112,7 +112,7 @@ async function renderDashboard(){
   if (user.role==='manager' || user.role==='admin') {
     contentHtml += '<div class="card"><h2>Add a clerk or finance login</h2><div class="row"><div><label>Full name</label><input id="new_name" placeholder="Full name" /></div><div><label>Email</label><input id="new_email" type="email" placeholder="person@example.com" /></div><div><label>Role</label><select id="new_role"><option value="clerk">Clerk</option><option value="finance">Finance</option></select></div></div><div style="margin-top:12px;"><button id="createUserBtn">Create login</button></div><div class="error" id="createUserErr"></div><div id="createUserResult"></div></div>';
   }
-  contentHtml += '<div class="card"><div class="topbar"><h2>Transactions</h2>'+(['manager','finance','admin'].includes(user.role)?'<button id="exportBtn" class="secondary">Download Excel</button>':'')+'</div><div id="table"></div></div>';
+  contentHtml += '<div class="card"><div class="topbar"><h2>Transactions</h2><div>'+(['manager','finance','admin'].includes(user.role)?'<button id="exportBtn" class="secondary">Download Excel</button>':'')+(['manager','admin'].includes(user.role)?' <button id="clearAllBtn" class="danger">Clear all data</button>':'')+'</div></div><div id="table"></div></div>';
   content.innerHTML = contentHtml;
 
   loadNotifications();
@@ -149,6 +149,14 @@ async function renderDashboard(){
       });
     };
   }
+  if (document.getElementById('clearAllBtn')) {
+    document.getElementById('clearAllBtn').onclick = async () => {
+      if (!confirm('This will permanently delete ALL transaction data for your site. Are you sure?')) return;
+      if (!confirm('Really sure? This cannot be undone.')) return;
+      try { await api('/transactions?confirm=yes', {method:'DELETE'}); loadTable(); }
+      catch(e){ alert(e.message); }
+    };
+  }
   loadTable();
 }
 async function loadTable(){
@@ -173,6 +181,28 @@ async function loadTable(){
         .then(r=>r.text()).then(html=>{ const w = window.open('', '_blank'); w.document.write(html); w.document.close(); });
     };
   });
+  document.querySelectorAll('[data-delete]').forEach(btn => {
+    btn.onclick = async () => {
+      if (!confirm('Delete this transaction permanently? This cannot be undone.')) return;
+      try { await api('/transactions/'+btn.dataset.delete, {method:'DELETE'}); loadTable(); }
+      catch(e){ alert(e.message); }
+    };
+  });
+  document.querySelectorAll('[data-edit]').forEach(btn => {
+    btn.onclick = async () => {
+      const row = rows.find(r => r.id === btn.dataset.edit);
+      const newDesc = prompt('Description:', row.description);
+      if (newDesc === null) return;
+      const newAmount = prompt('Amount (KES):', row.amount);
+      if (newAmount === null) return;
+      const newStatus = prompt('Status (pending/approved/rejected/paid):', row.status);
+      if (newStatus === null) return;
+      try {
+        await api('/transactions/'+row.id, {method:'PUT', body: JSON.stringify({description:newDesc, amount:newAmount, status:newStatus})});
+        loadTable();
+      } catch(e){ alert(e.message); }
+    };
+  });
 }
 function actionButtons(t,user){
   const canAct = ['manager','finance','admin'].includes(user.role);
@@ -184,6 +214,10 @@ function actionButtons(t,user){
   }
   if (t.status==='approved' && (user.role==='finance'||user.role==='admin')) b += '<button data-action="pay" data-id="'+t.id+'">Mark Paid</button>';
   if (t.status==='paid') b += '<button class="secondary" data-receipt="'+t.id+'">Receipt</button>';
+  if (user.role==='manager' || user.role==='admin') {
+    b += '<button class="secondary" data-edit="'+t.id+'">Edit</button>';
+    b += '<button class="danger" data-delete="'+t.id+'">Delete</button>';
+  }
   return b;
 }
 async function loadNotifications(){
@@ -324,6 +358,51 @@ app.post('/api/transactions/:id/pay', requireAuth, requireRole('finance', 'admin
   for (const uid of recipients) await notify(uid, id, 'paid_receipt', receiptMsg);
 
   res.json(data);
+});
+
+// ---------- Manager/admin direct edit & delete (full data control) ----------
+app.put('/api/transactions/:id', requireAuth, requireRole('manager', 'admin'), async (req, res) => {
+  const { id } = req.params;
+  const { category, description, amount, transaction_date, status } = req.body;
+
+  const updates = { updated_at: new Date().toISOString() };
+  if (category) {
+    if (!CATEGORIES.includes(category)) return res.status(400).json({ error: `category must be one of: ${CATEGORIES.join(', ')}` });
+    updates.category = category;
+  }
+  if (description) updates.description = description;
+  if (amount) updates.amount = amount;
+  if (transaction_date) updates.transaction_date = transaction_date;
+  if (status) {
+    if (!['pending', 'approved', 'rejected', 'paid'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
+    updates.status = status;
+  }
+
+  const { data, error } = await supabase.from('cst_transactions').update(updates).eq('id', id).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: 'Transaction not found' });
+  res.json(data);
+});
+
+app.delete('/api/transactions/:id', requireAuth, requireRole('manager', 'admin'), async (req, res) => {
+  const { id } = req.params;
+  const { error } = await supabase.from('cst_transactions').delete().eq('id', id);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
+});
+
+// Bulk-clear all transaction data for a site — destructive, requires explicit confirm=yes
+app.delete('/api/transactions', requireAuth, requireRole('manager', 'admin'), async (req, res) => {
+  if (req.query.confirm !== 'yes') return res.status(400).json({ error: 'Add ?confirm=yes to confirm this destructive action' });
+
+  let query = supabase.from('cst_transactions').delete();
+  const site_id = req.user.role === 'admin' ? req.query.site_id : req.user.site_id;
+  if (site_id) query = query.eq('site_id', site_id);
+  else if (req.user.role !== 'admin') return res.status(400).json({ error: 'No site associated with your account' });
+
+  const { error } = await query;
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
 });
 
 // ---------- Excel export ----------
