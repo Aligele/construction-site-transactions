@@ -105,8 +105,14 @@ async function renderDashboard(){
   appEl.innerHTML = '<div class="topbar"><div><h1>Site Transactions</h1><p class="muted">'+user.full_name+' &middot; '+user.role+'</p></div><button class="secondary" id="logoutBtn">Log out</button></div><div id="content"></div>';
   document.getElementById('logoutBtn').onclick = logout;
   const content = document.getElementById('content');
+  let contentHtml = '';
   if (user.role==='clerk' || user.role==='admin') {
-    content.innerHTML += '<div class="card"><h2>Log a transaction</h2><div class="row"><div><label>Site ID</label><input id="site_id" placeholder="site UUID" value="'+(user.site_id||'')+'" /></div><div><label>Category</label><select id="category"><option value="materials">Materials</option><option value="labor">Labor</option><option value="equipment">Equipment</option><option value="fuel">Fuel</option><option value="other">Other</option></select></div><div><label>Amount (KES)</label><input id="amount" type="number" step="0.01" /></div></div><label>Description</label><textarea id="description" rows="2" style="width:100%;"></textarea><div style="margin-top:12px;"><button id="submitTxn">Submit</button></div><div class="error" id="submitErr"></div></div>';
+    contentHtml += '<div class="card"><h2>Log a transaction</h2><div class="row"><div><label>Site ID</label><input id="site_id" placeholder="site UUID" value="'+(user.site_id||'')+'" /></div><div><label>Category</label><select id="category"><option value="materials">Materials</option><option value="labor">Labor</option><option value="equipment">Equipment</option><option value="fuel">Fuel</option><option value="other">Other</option></select></div><div><label>Amount (KES)</label><input id="amount" type="number" step="0.01" /></div></div><label>Description</label><textarea id="description" rows="2" style="width:100%;"></textarea><div style="margin-top:12px;"><button id="submitTxn">Submit</button></div><div class="error" id="submitErr"></div></div>';
+  }
+  contentHtml += '<div class="card"><div class="topbar"><h2>Transactions</h2>'+(['manager','finance','admin'].includes(user.role)?'<button id="exportBtn" class="secondary">Download Excel</button>':'')+'</div><div id="table"></div></div>';
+  content.innerHTML = contentHtml;
+
+  if (document.getElementById('submitTxn')) {
     document.getElementById('submitTxn').onclick = async () => {
       const site_id = document.getElementById('site_id').value.trim();
       const category = document.getElementById('category').value;
@@ -116,7 +122,6 @@ async function renderDashboard(){
       catch(e){ document.getElementById('submitErr').textContent = e.message; }
     };
   }
-  content.innerHTML += '<div class="card"><div class="topbar"><h2>Transactions</h2>'+(['manager','finance','admin'].includes(user.role)?'<button id="exportBtn" class="secondary">Download Excel</button>':'')+'</div><div id="table"></div></div>';
   if (document.getElementById('exportBtn')) {
     document.getElementById('exportBtn').onclick = () => {
       fetch(API+'/export', {headers:{Authorization:'Bearer '+state.token}}).then(r=>r.blob()).then(blob=>{
