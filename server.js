@@ -234,18 +234,12 @@ async function toggleDetails(txnId){
   const body = document.getElementById('details-body-'+txnId);
   body.textContent = 'Loading...';
   try {
-    const [checklist, vendorLinks, allVendors] = await Promise.all([
-      api('/transactions/'+txnId+'/checklist'),
+    const [vendorLinks, allVendors] = await Promise.all([
       api('/transactions/'+txnId+'/vendors'),
       api('/vendors')
     ]);
     const canManage = ['manager','finance','admin'].includes(state.user.role);
-    let html = '<strong>Checklist</strong>';
-    html += checklist.length ? '<ul style="padding-left:18px;margin:6px 0;">' + checklist.map(c =>
-      '<li style="margin-bottom:4px;"><label style="font-weight:normal;"><input type="checkbox" data-toggle-item="'+c.id+'" '+(c.status==='done'?'checked':'')+(canManage?'':' disabled')+' /> '+c.label+'</label></li>'
-    ).join('') + '</ul>' : '<div class="muted">No checklist items yet.</div>';
-
-    html += '<strong>Assigned partners/vendors</strong>';
+    let html = '<strong>Assigned partners/vendors</strong>';
     html += vendorLinks.length ? '<ul style="padding-left:18px;margin:6px 0;">' + vendorLinks.map(v =>
       '<li>'+v.vendor.name+' <span class="muted">('+v.vendor.role_type+')</span>'+(canManage?' <button class="danger" style="padding:2px 6px;font-size:11px;" data-remove-vendor="'+v.id+'">remove</button>':'')+'</li>'
     ).join('') + '</ul>' : '<div class="muted">No vendors assigned.</div>';
@@ -258,9 +252,6 @@ async function toggleDetails(txnId){
     }
     body.innerHTML = html;
 
-    body.querySelectorAll('[data-toggle-item]').forEach(cb => {
-      cb.onchange = async () => { try { await api('/checklist-items/'+cb.dataset.toggleItem+'/toggle', {method:'POST'}); } catch(e){ alert(e.message); cb.checked=!cb.checked; } };
-    });
     body.querySelectorAll('[data-remove-vendor]').forEach(btn => {
       btn.onclick = async () => { try { await api('/transaction-vendors/'+btn.dataset.removeVendor, {method:'DELETE'}); toggleDetails(txnId); openDetails[txnId]=false; toggleDetails(txnId); } catch(e){ alert(e.message); } };
     });
@@ -346,7 +337,6 @@ app.post('/api/transactions', requireAuth, requireRole('clerk', 'admin'), async 
   }).select().single();
 
   if (error) return res.status(500).json({ error: error.message });
-  await populateChecklist(data.id, 'pending');
   res.status(201).json(data);
 });
 
@@ -375,7 +365,6 @@ app.post('/api/transactions/:id/approve/manager', requireAuth, requireRole('mana
   await supabase.from('cst_approval_log').insert({ transaction_id: id, actor_id: req.user.id, action: 'approve_manager' });
 
   if (data.status === 'approved') {
-    await populateChecklist(id, 'approved');
     await notify(data.created_by, id, 'fully_approved', await renderTemplate('fully_approved', data));
   } else {
     await notify(data.created_by, id, 'approved_manager', await renderTemplate('approved_manager', data));
@@ -397,7 +386,6 @@ app.post('/api/transactions/:id/approve/finance', requireAuth, requireRole('fina
   await supabase.from('cst_approval_log').insert({ transaction_id: id, actor_id: req.user.id, action: 'approve_finance' });
 
   if (data.status === 'approved') {
-    await populateChecklist(id, 'approved');
     await notify(data.created_by, id, 'fully_approved', await renderTemplate('fully_approved', data));
   } else {
     await notify(data.created_by, id, 'approved_finance', await renderTemplate('approved_finance', data));
@@ -435,7 +423,6 @@ app.post('/api/transactions/:id/pay', requireAuth, requireRole('finance', 'admin
 
   if (error) return res.status(500).json({ error: error.message });
   await supabase.from('cst_approval_log').insert({ transaction_id: id, actor_id: req.user.id, action: 'mark_paid' });
-  await populateChecklist(id, 'paid');
 
   const receiptMsg = await renderTemplate('paid_receipt', data);
   const recipients = new Set([data.created_by, data.manager_approved_by, data.finance_approved_by].filter(Boolean));
@@ -605,16 +592,6 @@ async function notify(userId, transactionId, type, message) {
   await supabase.from('cst_notifications').insert({ user_id: userId, transaction_id: transactionId, type, message });
 }
 
-// Auto-populate the stage-specific checklist for a transaction when its status changes
-async function populateChecklist(transactionId, status) {
-  const { data: templates } = await supabase.from('cst_checklist_templates').select('*').eq('status', status).order('sort_order');
-  if (!templates || !templates.length) return;
-  const { data: existing } = await supabase.from('cst_checklist_items').select('label').eq('transaction_id', transactionId);
-  const existingLabels = new Set((existing || []).map(e => e.label));
-  const toInsert = templates.filter(t => !existingLabels.has(t.label)).map(t => ({ transaction_id: transactionId, label: t.label }));
-  if (toInsert.length) await supabase.from('cst_checklist_items').insert(toInsert);
-}
-
 app.get('/api/notifications', requireAuth, async (req, res) => {
   const { data, error } = await supabase
     .from('cst_notifications')
@@ -664,26 +641,6 @@ app.get('/api/transactions/:id/receipt', requireAuth, async (req, res) => {
   <div class="stamp">PAID &check;</div>
   <p style="margin-top:24px;"><button onclick="window.print()">Print / Save as PDF</button></p>
   </div></body></html>`);
-});
-
-// ---------- Checklists (stage-specific, auto-populated on status change) ----------
-app.get('/api/transactions/:id/checklist', requireAuth, async (req, res) => {
-  const { data, error } = await supabase.from('cst_checklist_items').select('*').eq('transaction_id', req.params.id).order('created_at');
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
-});
-
-app.post('/api/checklist-items/:itemId/toggle', requireAuth, requireRole('manager', 'finance', 'admin'), async (req, res) => {
-  const { data: item, error: fe } = await supabase.from('cst_checklist_items').select('*').eq('id', req.params.itemId).single();
-  if (fe || !item) return res.status(404).json({ error: 'Checklist item not found' });
-  const nowDone = item.status !== 'done';
-  const { data, error } = await supabase.from('cst_checklist_items').update({
-    status: nowDone ? 'done' : 'pending',
-    done_by: nowDone ? req.user.id : null,
-    done_at: nowDone ? new Date().toISOString() : null
-  }).eq('id', req.params.itemId).select().single();
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
 });
 
 // ---------- Vendors / partners ----------
