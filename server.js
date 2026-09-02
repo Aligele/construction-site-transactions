@@ -111,11 +111,13 @@ async function renderDashboard(){
   }
   if (user.role==='manager' || user.role==='admin') {
     contentHtml += '<div class="card"><h2>Add a clerk or finance login</h2><div class="row"><div><label>Full name</label><input id="new_name" placeholder="Full name" /></div><div><label>Email</label><input id="new_email" type="email" placeholder="person@example.com" /></div><div><label>Role</label><select id="new_role"><option value="clerk">Clerk</option><option value="finance">Finance</option></select></div></div><div style="margin-top:12px;"><button id="createUserBtn">Create login</button></div><div class="error" id="createUserErr"></div><div id="createUserResult"></div></div>';
+    contentHtml += '<div class="card"><h2>Message templates</h2><p class="muted">Tokens: {{description}} {{amount}} {{site_name}} {{paid_date}} {{reason_suffix}}</p><div id="templateList" class="muted">Loading...</div></div>';
   }
   contentHtml += '<div class="card"><div class="topbar"><h2>Transactions</h2><div>'+(['manager','finance','admin'].includes(user.role)?'<button id="exportBtn" class="secondary">Download Excel</button>':'')+(['manager','admin'].includes(user.role)?' <button id="clearAllBtn" class="danger">Clear all data</button>':'')+'</div></div><div id="table"></div></div>';
   content.innerHTML = contentHtml;
 
   loadNotifications();
+  if (document.getElementById('templateList')) loadTemplates();
 
   if (document.getElementById('createUserBtn')) {
     document.getElementById('createUserBtn').onclick = async () => {
@@ -164,7 +166,8 @@ async function loadTable(){
   const rows = await api('/transactions');
   let html = '<table><thead><tr><th>Date</th><th>Category</th><th>Description</th><th>Amount</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
   rows.forEach(t => {
-    html += '<tr><td>'+t.transaction_date+'</td><td>'+t.category+'</td><td>'+t.description+'</td><td>'+money(t.amount)+'</td><td>'+badge(t.status)+'</td><td class="actions">'+actionButtons(t,user)+'</td></tr>';
+    html += '<tr><td>'+t.transaction_date+'</td><td>'+t.category+'</td><td>'+t.description+'</td><td>'+money(t.amount)+'</td><td>'+badge(t.status)+'</td><td class="actions">'+actionButtons(t,user)+' <button class="secondary" data-details="'+t.id+'">Details</button></td></tr>';
+    html += '<tr id="details-'+t.id+'" style="display:none;"><td colspan="6"><div id="details-body-'+t.id+'" class="muted">Loading...</div></td></tr>';
   });
   html += '</tbody></table>';
   document.getElementById('table').innerHTML = html;
@@ -187,6 +190,9 @@ async function loadTable(){
       try { await api('/transactions/'+btn.dataset.delete, {method:'DELETE'}); loadTable(); }
       catch(e){ alert(e.message); }
     };
+  });
+  document.querySelectorAll('[data-details]').forEach(btn => {
+    btn.onclick = () => toggleDetails(btn.dataset.details);
   });
   document.querySelectorAll('[data-edit]').forEach(btn => {
     btn.onclick = async () => {
@@ -219,6 +225,80 @@ function actionButtons(t,user){
     b += '<button class="danger" data-delete="'+t.id+'">Delete</button>';
   }
   return b;
+}
+let openDetails = {};
+async function toggleDetails(txnId){
+  const row = document.getElementById('details-'+txnId);
+  if (openDetails[txnId]) { row.style.display='none'; openDetails[txnId]=false; return; }
+  row.style.display='table-row'; openDetails[txnId]=true;
+  const body = document.getElementById('details-body-'+txnId);
+  body.textContent = 'Loading...';
+  try {
+    const [checklist, vendorLinks, allVendors] = await Promise.all([
+      api('/transactions/'+txnId+'/checklist'),
+      api('/transactions/'+txnId+'/vendors'),
+      api('/vendors')
+    ]);
+    const canManage = ['manager','finance','admin'].includes(state.user.role);
+    let html = '<strong>Checklist</strong>';
+    html += checklist.length ? '<ul style="padding-left:18px;margin:6px 0;">' + checklist.map(c =>
+      '<li style="margin-bottom:4px;"><label style="font-weight:normal;"><input type="checkbox" data-toggle-item="'+c.id+'" '+(c.status==='done'?'checked':'')+(canManage?'':' disabled')+' /> '+c.label+'</label></li>'
+    ).join('') + '</ul>' : '<div class="muted">No checklist items yet.</div>';
+
+    html += '<strong>Assigned partners/vendors</strong>';
+    html += vendorLinks.length ? '<ul style="padding-left:18px;margin:6px 0;">' + vendorLinks.map(v =>
+      '<li>'+v.vendor.name+' <span class="muted">('+v.vendor.role_type+')</span>'+(canManage?' <button class="danger" style="padding:2px 6px;font-size:11px;" data-remove-vendor="'+v.id+'">remove</button>':'')+'</li>'
+    ).join('') + '</ul>' : '<div class="muted">No vendors assigned.</div>';
+
+    if (canManage) {
+      html += '<div class="row" style="margin-top:8px;"><select id="vendorSelect-'+txnId+'">' +
+        allVendors.map(v => '<option value="'+v.id+'">'+v.name+' ('+v.role_type+')</option>').join('') +
+        '</select><button data-assign-vendor="'+txnId+'">Assign</button></div>';
+      html += '<div class="muted" style="margin-top:6px;">New vendor: <input id="newVendorName-'+txnId+'" placeholder="Name" style="width:120px;" /> <select id="newVendorType-'+txnId+'"><option value="vendor">Vendor</option><option value="inspector">Inspector</option><option value="legal_counsel">Legal Counsel</option><option value="underwriter">Underwriter</option><option value="other">Other</option></select> <button class="secondary" data-add-vendor="'+txnId+'">Add</button></div>';
+    }
+    body.innerHTML = html;
+
+    body.querySelectorAll('[data-toggle-item]').forEach(cb => {
+      cb.onchange = async () => { try { await api('/checklist-items/'+cb.dataset.toggleItem+'/toggle', {method:'POST'}); } catch(e){ alert(e.message); cb.checked=!cb.checked; } };
+    });
+    body.querySelectorAll('[data-remove-vendor]').forEach(btn => {
+      btn.onclick = async () => { try { await api('/transaction-vendors/'+btn.dataset.removeVendor, {method:'DELETE'}); toggleDetails(txnId); openDetails[txnId]=false; toggleDetails(txnId); } catch(e){ alert(e.message); } };
+    });
+    const assignBtn = body.querySelector('[data-assign-vendor]');
+    if (assignBtn) assignBtn.onclick = async () => {
+      const vendor_id = document.getElementById('vendorSelect-'+txnId).value;
+      try { await api('/transactions/'+txnId+'/vendors', {method:'POST', body: JSON.stringify({vendor_id})}); openDetails[txnId]=false; toggleDetails(txnId); }
+      catch(e){ alert(e.message); }
+    };
+    const addBtn = body.querySelector('[data-add-vendor]');
+    if (addBtn) addBtn.onclick = async () => {
+      const name = document.getElementById('newVendorName-'+txnId).value.trim();
+      const role_type = document.getElementById('newVendorType-'+txnId).value;
+      if (!name) return;
+      try {
+        const v = await api('/vendors', {method:'POST', body: JSON.stringify({name, role_type})});
+        await api('/transactions/'+txnId+'/vendors', {method:'POST', body: JSON.stringify({vendor_id: v.id})});
+        openDetails[txnId]=false; toggleDetails(txnId);
+      } catch(e){ alert(e.message); }
+    };
+  } catch(e) { body.textContent = 'Could not load details: ' + e.message; }
+}
+async function loadTemplates(){
+  const el = document.getElementById('templateList');
+  try {
+    const templates = await api('/templates');
+    el.innerHTML = templates.map(t =>
+      '<div style="margin-bottom:12px;"><label>'+t.event_type+'</label><textarea data-template="'+t.event_type+'" rows="2" style="width:100%;">'+t.template+'</textarea><button class="secondary" data-save-template="'+t.event_type+'" style="margin-top:4px;">Save</button></div>'
+    ).join('');
+    el.querySelectorAll('[data-save-template]').forEach(btn => {
+      btn.onclick = async () => {
+        const eventType = btn.dataset.saveTemplate;
+        const value = el.querySelector('[data-template="'+eventType+'"]').value;
+        try { await api('/templates/'+eventType, {method:'PUT', body: JSON.stringify({template:value})}); btn.textContent='Saved'; setTimeout(()=>btn.textContent='Save',1200); }
+        catch(e){ alert(e.message); }
+      };
+    });
+  } catch(e) { el.textContent = 'Could not load templates.'; }
 }
 async function loadNotifications(){
   try {
@@ -266,6 +346,7 @@ app.post('/api/transactions', requireAuth, requireRole('clerk', 'admin'), async 
   }).select().single();
 
   if (error) return res.status(500).json({ error: error.message });
+  await populateChecklist(data.id, 'pending');
   res.status(201).json(data);
 });
 
@@ -294,9 +375,10 @@ app.post('/api/transactions/:id/approve/manager', requireAuth, requireRole('mana
   await supabase.from('cst_approval_log').insert({ transaction_id: id, actor_id: req.user.id, action: 'approve_manager' });
 
   if (data.status === 'approved') {
-    await notify(data.created_by, id, 'fully_approved', `Your transaction "${data.description}" (KES ${data.amount}) was fully approved and is ready to be paid.`);
+    await populateChecklist(id, 'approved');
+    await notify(data.created_by, id, 'fully_approved', await renderTemplate('fully_approved', data));
   } else {
-    await notify(data.created_by, id, 'approved_manager', `Manager approved your transaction "${data.description}" (KES ${data.amount}). Waiting on finance.`);
+    await notify(data.created_by, id, 'approved_manager', await renderTemplate('approved_manager', data));
   }
   res.json(data);
 });
@@ -315,9 +397,10 @@ app.post('/api/transactions/:id/approve/finance', requireAuth, requireRole('fina
   await supabase.from('cst_approval_log').insert({ transaction_id: id, actor_id: req.user.id, action: 'approve_finance' });
 
   if (data.status === 'approved') {
-    await notify(data.created_by, id, 'fully_approved', `Your transaction "${data.description}" (KES ${data.amount}) was fully approved and is ready to be paid.`);
+    await populateChecklist(id, 'approved');
+    await notify(data.created_by, id, 'fully_approved', await renderTemplate('fully_approved', data));
   } else {
-    await notify(data.created_by, id, 'approved_finance', `Finance approved your transaction "${data.description}" (KES ${data.amount}). Waiting on manager.`);
+    await notify(data.created_by, id, 'approved_finance', await renderTemplate('approved_finance', data));
   }
   res.json(data);
 });
@@ -336,7 +419,7 @@ app.post('/api/transactions/:id/reject', requireAuth, requireRole('manager', 'fi
 
   if (error) return res.status(500).json({ error: error.message });
   await supabase.from('cst_approval_log').insert({ transaction_id: id, actor_id: req.user.id, action: 'reject', note: reason || null });
-  await notify(data.created_by, id, 'rejected', `Your transaction "${data.description}" (KES ${data.amount}) was rejected.${reason ? ' Reason: ' + reason : ''}`);
+  await notify(data.created_by, id, 'rejected', await renderTemplate('rejected', data, { reason }));
   res.json(data);
 });
 
@@ -352,8 +435,9 @@ app.post('/api/transactions/:id/pay', requireAuth, requireRole('finance', 'admin
 
   if (error) return res.status(500).json({ error: error.message });
   await supabase.from('cst_approval_log').insert({ transaction_id: id, actor_id: req.user.id, action: 'mark_paid' });
+  await populateChecklist(id, 'paid');
 
-  const receiptMsg = `Payment settled for "${data.description}" (KES ${data.amount}). Receipt available.`;
+  const receiptMsg = await renderTemplate('paid_receipt', data);
   const recipients = new Set([data.created_by, data.manager_approved_by, data.finance_approved_by].filter(Boolean));
   for (const uid of recipients) await notify(uid, id, 'paid_receipt', receiptMsg);
 
@@ -496,10 +580,39 @@ app.get('/api/users', requireAuth, requireRole('manager', 'finance', 'admin'), a
   res.json(data);
 });
 
-// ---------- Notifications ----------
+// ---------- Notifications (template-driven with token substitution) ----------
+async function renderTemplate(eventType, txn, extra = {}) {
+  const { data: tmpl } = await supabase.from('cst_message_templates').select('template').eq('event_type', eventType).single();
+  let site_name = '';
+  try {
+    const { data: site } = await supabase.from('cst_sites').select('name').eq('id', txn.site_id).single();
+    site_name = site ? site.name : '';
+  } catch {}
+  const tokens = {
+    description: txn.description,
+    amount: 'KES ' + Number(txn.amount).toLocaleString(undefined, { minimumFractionDigits: 2 }),
+    site_name,
+    paid_date: txn.paid_at ? new Date(txn.paid_at).toISOString().slice(0, 10) : '',
+    reason_suffix: extra.reason ? ' Reason: ' + extra.reason : ''
+  };
+  let text = tmpl ? tmpl.template : `${eventType}: {{description}} ({{amount}})`;
+  for (const [k, v] of Object.entries(tokens)) text = text.split('{{' + k + '}}').join(v || '');
+  return text;
+}
+
 async function notify(userId, transactionId, type, message) {
   if (!userId) return;
   await supabase.from('cst_notifications').insert({ user_id: userId, transaction_id: transactionId, type, message });
+}
+
+// Auto-populate the stage-specific checklist for a transaction when its status changes
+async function populateChecklist(transactionId, status) {
+  const { data: templates } = await supabase.from('cst_checklist_templates').select('*').eq('status', status).order('sort_order');
+  if (!templates || !templates.length) return;
+  const { data: existing } = await supabase.from('cst_checklist_items').select('label').eq('transaction_id', transactionId);
+  const existingLabels = new Set((existing || []).map(e => e.label));
+  const toInsert = templates.filter(t => !existingLabels.has(t.label)).map(t => ({ transaction_id: transactionId, label: t.label }));
+  if (toInsert.length) await supabase.from('cst_checklist_items').insert(toInsert);
 }
 
 app.get('/api/notifications', requireAuth, async (req, res) => {
@@ -551,6 +664,83 @@ app.get('/api/transactions/:id/receipt', requireAuth, async (req, res) => {
   <div class="stamp">PAID &check;</div>
   <p style="margin-top:24px;"><button onclick="window.print()">Print / Save as PDF</button></p>
   </div></body></html>`);
+});
+
+// ---------- Checklists (stage-specific, auto-populated on status change) ----------
+app.get('/api/transactions/:id/checklist', requireAuth, async (req, res) => {
+  const { data, error } = await supabase.from('cst_checklist_items').select('*').eq('transaction_id', req.params.id).order('created_at');
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+app.post('/api/checklist-items/:itemId/toggle', requireAuth, requireRole('manager', 'finance', 'admin'), async (req, res) => {
+  const { data: item, error: fe } = await supabase.from('cst_checklist_items').select('*').eq('id', req.params.itemId).single();
+  if (fe || !item) return res.status(404).json({ error: 'Checklist item not found' });
+  const nowDone = item.status !== 'done';
+  const { data, error } = await supabase.from('cst_checklist_items').update({
+    status: nowDone ? 'done' : 'pending',
+    done_by: nowDone ? req.user.id : null,
+    done_at: nowDone ? new Date().toISOString() : null
+  }).eq('id', req.params.itemId).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+// ---------- Vendors / partners ----------
+app.get('/api/vendors', requireAuth, async (req, res) => {
+  let query = supabase.from('cst_vendors').select('*').order('name');
+  if (req.user.role !== 'admin' && req.user.site_id) query = query.eq('site_id', req.user.site_id);
+  const { data, error } = await query;
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+app.post('/api/vendors', requireAuth, requireRole('manager', 'finance', 'admin'), async (req, res) => {
+  const { name, role_type, contact_phone, contact_email } = req.body;
+  if (!name) return res.status(400).json({ error: 'name is required' });
+  const { data, error } = await supabase.from('cst_vendors').insert({
+    name, role_type: role_type || 'vendor', contact_phone, contact_email, site_id: req.user.site_id
+  }).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.status(201).json(data);
+});
+
+app.get('/api/transactions/:id/vendors', requireAuth, async (req, res) => {
+  const { data, error } = await supabase.from('cst_transaction_vendors').select('id, vendor:vendor_id(id, name, role_type, contact_phone, contact_email)').eq('transaction_id', req.params.id);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+app.post('/api/transactions/:id/vendors', requireAuth, requireRole('manager', 'finance', 'admin'), async (req, res) => {
+  const { vendor_id } = req.body;
+  if (!vendor_id) return res.status(400).json({ error: 'vendor_id is required' });
+  const { data, error } = await supabase.from('cst_transaction_vendors').insert({ transaction_id: req.params.id, vendor_id }).select().single();
+  if (error) {
+    if (error.message.includes('duplicate')) return res.status(409).json({ error: 'That vendor is already assigned to this transaction' });
+    return res.status(500).json({ error: error.message });
+  }
+  res.status(201).json(data);
+});
+
+app.delete('/api/transaction-vendors/:linkId', requireAuth, requireRole('manager', 'finance', 'admin'), async (req, res) => {
+  const { error } = await supabase.from('cst_transaction_vendors').delete().eq('id', req.params.linkId);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
+});
+
+// ---------- Message templates (custom tokens: {{description}} {{amount}} {{site_name}} {{paid_date}} {{reason_suffix}}) ----------
+app.get('/api/templates', requireAuth, requireRole('manager', 'admin'), async (req, res) => {
+  const { data, error } = await supabase.from('cst_message_templates').select('*').order('event_type');
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+app.put('/api/templates/:eventType', requireAuth, requireRole('manager', 'admin'), async (req, res) => {
+  const { template } = req.body;
+  if (!template) return res.status(400).json({ error: 'template is required' });
+  const { data, error } = await supabase.from('cst_message_templates').update({ template, updated_at: new Date().toISOString() }).eq('event_type', req.params.eventType).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
 });
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
