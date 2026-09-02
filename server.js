@@ -105,12 +105,31 @@ async function renderDashboard(){
   appEl.innerHTML = '<div class="topbar"><div><h1>Site Transactions</h1><p class="muted">'+user.full_name+' &middot; '+user.role+'</p></div><button class="secondary" id="logoutBtn">Log out</button></div><div id="content"></div>';
   document.getElementById('logoutBtn').onclick = logout;
   const content = document.getElementById('content');
-  let contentHtml = '';
+  let contentHtml = '<div class="card"><div class="topbar"><h2>Notifications</h2><span class="muted" id="notifCount"></span></div><div id="notifList" class="muted">Loading...</div></div>';
   if (user.role==='clerk' || user.role==='admin') {
     contentHtml += '<div class="card"><h2>Log a transaction</h2><div class="row"><div><label>Site ID</label><input id="site_id" placeholder="site UUID" value="'+(user.site_id||'')+'" /></div><div><label>Category</label><select id="category"><option value="materials">Materials</option><option value="labor">Labor</option><option value="equipment">Equipment</option><option value="fuel">Fuel</option><option value="other">Other</option></select></div><div><label>Amount (KES)</label><input id="amount" type="number" step="0.01" /></div></div><label>Description</label><textarea id="description" rows="2" style="width:100%;"></textarea><div style="margin-top:12px;"><button id="submitTxn">Submit</button></div><div class="error" id="submitErr"></div></div>';
   }
+  if (user.role==='manager' || user.role==='admin') {
+    contentHtml += '<div class="card"><h2>Add a clerk or finance login</h2><div class="row"><div><label>Full name</label><input id="new_name" placeholder="Full name" /></div><div><label>Email</label><input id="new_email" type="email" placeholder="person@example.com" /></div><div><label>Role</label><select id="new_role"><option value="clerk">Clerk</option><option value="finance">Finance</option></select></div></div><div style="margin-top:12px;"><button id="createUserBtn">Create login</button></div><div class="error" id="createUserErr"></div><div id="createUserResult"></div></div>';
+  }
   contentHtml += '<div class="card"><div class="topbar"><h2>Transactions</h2>'+(['manager','finance','admin'].includes(user.role)?'<button id="exportBtn" class="secondary">Download Excel</button>':'')+'</div><div id="table"></div></div>';
   content.innerHTML = contentHtml;
+
+  loadNotifications();
+
+  if (document.getElementById('createUserBtn')) {
+    document.getElementById('createUserBtn').onclick = async () => {
+      const full_name = document.getElementById('new_name').value.trim();
+      const email = document.getElementById('new_email').value.trim();
+      const role = document.getElementById('new_role').value;
+      try {
+        const result = await api('/users', {method:'POST', body: JSON.stringify({full_name, email, role})});
+        document.getElementById('createUserErr').textContent = '';
+        document.getElementById('createUserResult').innerHTML = '<div class="card" style="background:#e2f1e8;margin-top:10px;"><strong>Login created.</strong><br/>Email: '+result.email+'<br/>Temporary password: <strong>'+result.temporary_password+'</strong><br/><span class="muted">Share this with them directly — it will not be shown again.</span></div>';
+        document.getElementById('new_name').value=''; document.getElementById('new_email').value='';
+      } catch(e) { document.getElementById('createUserErr').textContent = e.message; }
+    };
+  }
 
   if (document.getElementById('submitTxn')) {
     document.getElementById('submitTxn').onclick = async () => {
@@ -135,10 +154,9 @@ async function renderDashboard(){
 async function loadTable(){
   const {user} = state;
   const rows = await api('/transactions');
-  const canAct = ['manager','finance','admin'].includes(user.role);
-  let html = '<table><thead><tr><th>Date</th><th>Category</th><th>Description</th><th>Amount</th><th>Status</th>'+(canAct?'<th>Actions</th>':'')+'</tr></thead><tbody>';
+  let html = '<table><thead><tr><th>Date</th><th>Category</th><th>Description</th><th>Amount</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
   rows.forEach(t => {
-    html += '<tr><td>'+t.transaction_date+'</td><td>'+t.category+'</td><td>'+t.description+'</td><td>'+money(t.amount)+'</td><td>'+badge(t.status)+'</td>'+(canAct?'<td class="actions">'+actionButtons(t,user)+'</td>':'')+'</tr>';
+    html += '<tr><td>'+t.transaction_date+'</td><td>'+t.category+'</td><td>'+t.description+'</td><td>'+money(t.amount)+'</td><td>'+badge(t.status)+'</td><td class="actions">'+actionButtons(t,user)+'</td></tr>';
   });
   html += '</tbody></table>';
   document.getElementById('table').innerHTML = html;
@@ -149,17 +167,35 @@ async function loadTable(){
       catch(e){ alert(e.message); }
     };
   });
+  document.querySelectorAll('[data-receipt]').forEach(btn => {
+    btn.onclick = () => {
+      fetch(API+'/transactions/'+btn.dataset.receipt+'/receipt', {headers:{Authorization:'Bearer '+state.token}})
+        .then(r=>r.text()).then(html=>{ const w = window.open('', '_blank'); w.document.write(html); w.document.close(); });
+    };
+  });
 }
 function actionButtons(t,user){
-  if (t.status!=='pending' && t.status!=='approved') return '';
+  const canAct = ['manager','finance','admin'].includes(user.role);
   let b = '';
-  if (t.status==='pending') {
+  if (t.status==='pending' && canAct) {
     if ((user.role==='manager'||user.role==='admin') && !t.manager_approved) b += '<button class="success" data-action="approve/manager" data-id="'+t.id+'">Approve (Manager)</button>';
     if ((user.role==='finance'||user.role==='admin') && !t.finance_approved) b += '<button class="success" data-action="approve/finance" data-id="'+t.id+'">Approve (Finance)</button>';
     b += '<button class="danger" data-action="reject" data-id="'+t.id+'">Reject</button>';
   }
   if (t.status==='approved' && (user.role==='finance'||user.role==='admin')) b += '<button data-action="pay" data-id="'+t.id+'">Mark Paid</button>';
+  if (t.status==='paid') b += '<button class="secondary" data-receipt="'+t.id+'">Receipt</button>';
   return b;
+}
+async function loadNotifications(){
+  try {
+    const notes = await api('/notifications');
+    const unread = notes.filter(n => !n.read_at).length;
+    document.getElementById('notifCount').textContent = unread ? (unread+' new') : '';
+    if (!notes.length) { document.getElementById('notifList').textContent = 'No notifications yet.'; return; }
+    document.getElementById('notifList').innerHTML = notes.slice(0,8).map(n =>
+      '<div style="padding:8px 0;border-bottom:1px solid #eee;'+(n.read_at?'':'font-weight:600;')+'">'+n.message+'<div class="muted" style="font-weight:normal;">'+new Date(n.created_at).toLocaleString()+'</div></div>'
+    ).join('');
+  } catch(e) { document.getElementById('notifList').textContent = 'Could not load notifications.'; }
 }
 render();
 </script>
@@ -222,6 +258,12 @@ app.post('/api/transactions/:id/approve/manager', requireAuth, requireRole('mana
   const { data, error } = await supabase.from('cst_transactions').update(updates).eq('id', id).select().single();
   if (error) return res.status(500).json({ error: error.message });
   await supabase.from('cst_approval_log').insert({ transaction_id: id, actor_id: req.user.id, action: 'approve_manager' });
+
+  if (data.status === 'approved') {
+    await notify(data.created_by, id, 'fully_approved', `Your transaction "${data.description}" (KES ${data.amount}) was fully approved and is ready to be paid.`);
+  } else {
+    await notify(data.created_by, id, 'approved_manager', `Manager approved your transaction "${data.description}" (KES ${data.amount}). Waiting on finance.`);
+  }
   res.json(data);
 });
 
@@ -237,6 +279,12 @@ app.post('/api/transactions/:id/approve/finance', requireAuth, requireRole('fina
   const { data, error } = await supabase.from('cst_transactions').update(updates).eq('id', id).select().single();
   if (error) return res.status(500).json({ error: error.message });
   await supabase.from('cst_approval_log').insert({ transaction_id: id, actor_id: req.user.id, action: 'approve_finance' });
+
+  if (data.status === 'approved') {
+    await notify(data.created_by, id, 'fully_approved', `Your transaction "${data.description}" (KES ${data.amount}) was fully approved and is ready to be paid.`);
+  } else {
+    await notify(data.created_by, id, 'approved_finance', `Finance approved your transaction "${data.description}" (KES ${data.amount}). Waiting on manager.`);
+  }
   res.json(data);
 });
 
@@ -254,6 +302,7 @@ app.post('/api/transactions/:id/reject', requireAuth, requireRole('manager', 'fi
 
   if (error) return res.status(500).json({ error: error.message });
   await supabase.from('cst_approval_log').insert({ transaction_id: id, actor_id: req.user.id, action: 'reject', note: reason || null });
+  await notify(data.created_by, id, 'rejected', `Your transaction "${data.description}" (KES ${data.amount}) was rejected.${reason ? ' Reason: ' + reason : ''}`);
   res.json(data);
 });
 
@@ -269,6 +318,11 @@ app.post('/api/transactions/:id/pay', requireAuth, requireRole('finance', 'admin
 
   if (error) return res.status(500).json({ error: error.message });
   await supabase.from('cst_approval_log').insert({ transaction_id: id, actor_id: req.user.id, action: 'mark_paid' });
+
+  const receiptMsg = `Payment settled for "${data.description}" (KES ${data.amount}). Receipt available.`;
+  const recipients = new Set([data.created_by, data.manager_approved_by, data.finance_approved_by].filter(Boolean));
+  for (const uid of recipients) await notify(uid, id, 'paid_receipt', receiptMsg);
+
   res.json(data);
 });
 
@@ -322,6 +376,102 @@ app.get('/api/export', requireAuth, requireRole('manager', 'finance', 'admin'), 
   res.setHeader('Content-Disposition', `attachment; filename="site-transactions-${new Date().toISOString().slice(0, 10)}.xlsx"`);
   await workbook.xlsx.write(res);
   res.end();
+});
+
+// ---------- User management (manager/admin creates clerk & finance logins) ----------
+function randomPassword() {
+  const chars = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+  let out = '';
+  for (let i = 0; i < 10; i++) out += chars[Math.floor(Math.random() * chars.length)];
+  return out;
+}
+
+app.post('/api/users', requireAuth, requireRole('manager', 'admin'), async (req, res) => {
+  const { full_name, email, role } = req.body;
+  if (!full_name || !email || !role) return res.status(400).json({ error: 'full_name, email and role are required' });
+
+  const allowedRoles = req.user.role === 'admin' ? ['clerk', 'manager', 'finance', 'admin'] : ['clerk', 'finance'];
+  if (!allowedRoles.includes(role)) return res.status(403).json({ error: `You can only create: ${allowedRoles.join(', ')}` });
+
+  const site_id = req.body.site_id || req.user.site_id;
+  const plainPassword = randomPassword();
+  const password_hash = bcrypt.hashSync(plainPassword, 10);
+
+  const { data, error } = await supabase.from('cst_users').insert({
+    full_name, email: email.toLowerCase().trim(), password_hash, role, site_id
+  }).select('id, full_name, email, role, site_id').single();
+
+  if (error) {
+    if (error.message.includes('duplicate')) return res.status(409).json({ error: 'A user with this email already exists' });
+    return res.status(500).json({ error: error.message });
+  }
+  // Return the generated password once — the manager must relay it to the new user.
+  res.status(201).json({ ...data, temporary_password: plainPassword });
+});
+
+app.get('/api/users', requireAuth, requireRole('manager', 'finance', 'admin'), async (req, res) => {
+  let query = supabase.from('cst_users').select('id, full_name, email, role, site_id, created_at').order('created_at', { ascending: false });
+  if (req.user.role !== 'admin') query = query.eq('site_id', req.user.site_id);
+  const { data, error } = await query;
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+// ---------- Notifications ----------
+async function notify(userId, transactionId, type, message) {
+  if (!userId) return;
+  await supabase.from('cst_notifications').insert({ user_id: userId, transaction_id: transactionId, type, message });
+}
+
+app.get('/api/notifications', requireAuth, async (req, res) => {
+  const { data, error } = await supabase
+    .from('cst_notifications')
+    .select('*')
+    .eq('user_id', req.user.id)
+    .order('created_at', { ascending: false })
+    .limit(50);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+app.post('/api/notifications/:id/read', requireAuth, async (req, res) => {
+  const { error } = await supabase.from('cst_notifications').update({ read_at: new Date().toISOString() }).eq('id', req.params.id).eq('user_id', req.user.id);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
+});
+
+// ---------- Printable receipt (evidence after payment) ----------
+app.get('/api/transactions/:id/receipt', requireAuth, async (req, res) => {
+  const { id } = req.params;
+  const { data: txn, error } = await supabase.from('cst_transactions').select('*').eq('id', id).single();
+  if (error || !txn) return res.status(404).send('Transaction not found');
+
+  const allowed = req.user.role === 'admin' || req.user.id === txn.created_by || req.user.id === txn.manager_approved_by || req.user.id === txn.finance_approved_by || ['manager', 'finance'].includes(req.user.role);
+  if (!allowed) return res.status(403).send('Not permitted to view this receipt');
+  if (txn.status !== 'paid') return res.status(400).send('Receipt is only available once a transaction is paid');
+
+  res.type('html').send(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Receipt ${id}</title>
+  <style>body{font-family:Arial,sans-serif;max-width:480px;margin:40px auto;color:#1f2d3d;}
+  .box{border:1px solid #dde1e6;border-radius:10px;padding:24px;}
+  h1{font-size:18px;margin:0 0 4px;} .muted{color:#6b7684;font-size:12px;}
+  table{width:100%;border-collapse:collapse;margin-top:16px;}
+  td{padding:8px 0;border-bottom:1px solid #eee;font-size:14px;}
+  td:first-child{color:#6b7684;} .amt{font-size:22px;font-weight:700;margin-top:16px;}
+  .stamp{margin-top:20px;padding:8px 12px;background:#dfeee5;color:#2f7d4f;display:inline-block;border-radius:6px;font-weight:700;font-size:13px;}
+  @media print{button{display:none;}}</style></head>
+  <body><div class="box">
+  <h1>Payment Receipt</h1>
+  <p class="muted">Transaction ID: ${txn.id}</p>
+  <table>
+    <tr><td>Date</td><td>${txn.transaction_date}</td></tr>
+    <tr><td>Category</td><td>${txn.category}</td></tr>
+    <tr><td>Description</td><td>${txn.description}</td></tr>
+    <tr><td>Paid At</td><td>${txn.paid_at || ''}</td></tr>
+  </table>
+  <div class="amt">KES ${Number(txn.amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
+  <div class="stamp">PAID &check;</div>
+  <p style="margin-top:24px;"><button onclick="window.print()">Print / Save as PDF</button></p>
+  </div></body></html>`);
 });
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
