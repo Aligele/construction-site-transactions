@@ -1,5 +1,5 @@
 {
-  "name": "construction-site-transactions",
+  "name": " construction-site-transactions",
   "version": "1.0.0",
   "description": "Construction site transaction management (pending/paid) with clerk, manager, finance and admin roles",
   "main": "server.js",
