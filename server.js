@@ -388,12 +388,19 @@ async function toggleDetails(txnId){
   const body = document.getElementById('details-body-'+txnId);
   body.textContent = 'Loading...';
   try {
-    const [vendorLinks, allVendors] = await Promise.all([
+    const [vendorLinks, allVendors, batchItems] = await Promise.all([
       api('/transactions/'+txnId+'/vendors'),
-      api('/vendors')
+      api('/vendors'),
+      api('/transactions/'+txnId+'/batch-items')
     ]);
     const canManage = ['manager','finance','admin'].includes(state.user.role);
-    let html = '<strong>Assigned partners/vendors</strong>';
+    let html = '';
+    if (batchItems.length) {
+      html += '<strong>Item breakdown</strong><ul style="padding-left:18px;margin:6px 0;">' + batchItems.map(i =>
+        '<li>'+i.category+': '+i.description+' — '+money(i.amount)+'</li>'
+      ).join('') + '</ul>';
+    }
+    html += '<strong>Assigned partners/vendors</strong>';
     html += vendorLinks.length ? '<ul style="padding-left:18px;margin:6px 0;">' + vendorLinks.map(v =>
       '<li>'+v.vendor.name+' <span class="muted">('+v.vendor.role_type+')</span>'+(canManage?' <button class="danger" style="padding:2px 6px;font-size:11px;" data-remove-vendor="'+v.id+'">remove</button>':'')+'</li>'
     ).join('') + '</ul>' : '<div class="muted">No vendors assigned.</div>';
@@ -622,21 +629,28 @@ app.post('/api/batches', requireAuth, requireRole('clerk', 'admin'), async (req,
   }).select().single();
   if (batchErr) return res.status(500).json({ error: batchErr.message });
 
-  const rows = items.map(i => ({
-    site_id, category: i.category, description: i.description, amount: i.amount,
-    transaction_date: i.transaction_date || new Date().toISOString().slice(0, 10),
+  const itemRows = items.map(i => ({ batch_id: batch.id, category: i.category, description: i.description, amount: i.amount }));
+  const { error: itemErr } = await supabase.from('cst_batch_items').insert(itemRows);
+  if (itemErr) return res.status(500).json({ error: itemErr.message });
+
+  // Single transaction covering the whole batch — this is what manager/finance see and act on.
+  const uniqueCategories = [...new Set(items.map(i => i.category))];
+  const combinedCategory = uniqueCategories.length === 1 ? uniqueCategories[0] : 'mixed';
+  const combinedDescription = items.map(i => `${i.category}: ${i.description} (KES ${Number(i.amount).toLocaleString()})`).join('; ');
+
+  const { data: txn, error: txnErr } = await supabase.from('cst_transactions').insert({
+    site_id, category: combinedCategory, description: combinedDescription, amount: total,
+    transaction_date: new Date().toISOString().slice(0, 10),
     created_by: req.user.id, batch_id: batch.id
-  }));
-  const { data: txns, error: txnErr } = await supabase.from('cst_transactions').insert(rows).select();
+  }).select().single();
   if (txnErr) return res.status(500).json({ error: txnErr.message });
 
-  // Notify every manager and finance user at this site with the batch total.
+  // Notify every manager and finance user at this site with the combined total.
   const { data: recipients } = await supabase.from('cst_users').select('id').eq('site_id', site_id).in('role', ['manager', 'finance']);
-  const itemList = items.map(i => `${i.category}: ${i.description} (KES ${Number(i.amount).toLocaleString()})`).join('; ');
-  const msg = `New batch from a clerk: ${items.length} items totaling KES ${total.toLocaleString(undefined, { minimumFractionDigits: 2 })}. Items: ${itemList}`;
-  for (const r of (recipients || [])) await notify(r.id, null, 'batch_submitted', msg);
+  const msg = `New transaction from a clerk: ${items.length} items totaling KES ${total.toLocaleString(undefined, { minimumFractionDigits: 2 })}. Breakdown: ${combinedDescription}`;
+  for (const r of (recipients || [])) await notify(r.id, txn.id, 'batch_submitted', msg);
 
-  res.status(201).json({ batch, transactions: txns });
+  res.status(201).json({ batch, transaction: txn });
 });
 
 // ---------- Transaction routes ----------
@@ -956,6 +970,15 @@ app.post('/api/notifications/:id/read', requireAuth, async (req, res) => {
 });
 
 // ---------- Printable receipt (evidence after payment) ----------
+app.get('/api/transactions/:id/batch-items', requireAuth, async (req, res) => {
+  const { data: txn, error: txnErr } = await supabase.from('cst_transactions').select('batch_id').eq('id', req.params.id).single();
+  if (txnErr || !txn) return res.status(404).json({ error: 'Transaction not found' });
+  if (!txn.batch_id) return res.json([]);
+  const { data, error } = await supabase.from('cst_batch_items').select('*').eq('batch_id', txn.batch_id).order('created_at');
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
 app.get('/api/transactions/:id/receipt', requireAuth, async (req, res) => {
   const { id } = req.params;
   const { data: txn, error } = await supabase.from('cst_transactions').select('*').eq('id', id).single();
