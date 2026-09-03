@@ -173,12 +173,10 @@ async function renderDashboard(){
   }
   if (user.role==='manager' || user.role==='admin') {
     contentHtml += '<div class="card"><h2>Add a clerk or finance login</h2><div class="row"><div><label>Full name</label><input id="new_name" placeholder="Full name" /></div><div><label>Email</label><input id="new_email" type="email" placeholder="person@example.com" /></div><div><label>Role</label><select id="new_role"><option value="clerk">Clerk</option><option value="finance">Finance</option></select></div></div><div style="margin-top:12px;"><button id="createUserBtn">Create login</button></div><div class="error" id="createUserErr"></div><div id="createUserResult"></div></div>';
-    contentHtml += '<div class="card"><h2>Message templates</h2><p class="muted">Tokens: {{description}} {{amount}} {{site_name}} {{paid_date}} {{reason_suffix}}</p><div id="templateList" class="muted">Loading...</div></div>';
   }
   content.innerHTML = contentHtml;
 
   loadNotifications();
-  if (document.getElementById('templateList')) loadTemplates();
 
   if (document.getElementById('createUserBtn')) {
     document.getElementById('createUserBtn').onclick = async () => {
@@ -335,23 +333,6 @@ async function toggleDetails(txnId){
     };
   } catch(e) { body.textContent = 'Could not load details: ' + e.message; }
 }
-async function loadTemplates(){
-  const el = document.getElementById('templateList');
-  try {
-    const templates = await api('/templates');
-    el.innerHTML = templates.map(t =>
-      '<div style="margin-bottom:12px;"><label>'+t.event_type+'</label><textarea data-template="'+t.event_type+'" rows="2" style="width:100%;">'+t.template+'</textarea><button class="secondary" data-save-template="'+t.event_type+'" style="margin-top:4px;">Save</button></div>'
-    ).join('');
-    el.querySelectorAll('[data-save-template]').forEach(btn => {
-      btn.onclick = async () => {
-        const eventType = btn.dataset.saveTemplate;
-        const value = el.querySelector('[data-template="'+eventType+'"]').value;
-        try { await api('/templates/'+eventType, {method:'PUT', body: JSON.stringify({template:value})}); btn.textContent='Saved'; setTimeout(()=>btn.textContent='Save',1200); }
-        catch(e){ alert(e.message); }
-      };
-    });
-  } catch(e) { el.textContent = 'Could not load templates.'; }
-}
 async function loadNotifications(){
   try {
     const notes = await api('/notifications');
@@ -428,9 +409,9 @@ app.post('/api/transactions/:id/approve/manager', requireAuth, requireRole('mana
   await supabase.from('cst_approval_log').insert({ transaction_id: id, actor_id: req.user.id, action: 'approve_manager' });
 
   if (data.status === 'approved') {
-    await notify(data.created_by, id, 'fully_approved', await renderTemplate('fully_approved', data));
+    await notify(data.created_by, id, 'fully_approved', `Your transaction "${data.description}" (KES ${data.amount}) was fully approved and is ready to be paid.`);
   } else {
-    await notify(data.created_by, id, 'approved_manager', await renderTemplate('approved_manager', data));
+    await notify(data.created_by, id, 'approved_manager', `Manager approved your transaction "${data.description}" (KES ${data.amount}). Waiting on finance.`);
   }
   res.json(data);
 });
@@ -449,9 +430,9 @@ app.post('/api/transactions/:id/approve/finance', requireAuth, requireRole('fina
   await supabase.from('cst_approval_log').insert({ transaction_id: id, actor_id: req.user.id, action: 'approve_finance' });
 
   if (data.status === 'approved') {
-    await notify(data.created_by, id, 'fully_approved', await renderTemplate('fully_approved', data));
+    await notify(data.created_by, id, 'fully_approved', `Your transaction "${data.description}" (KES ${data.amount}) was fully approved and is ready to be paid.`);
   } else {
-    await notify(data.created_by, id, 'approved_finance', await renderTemplate('approved_finance', data));
+    await notify(data.created_by, id, 'approved_finance', `Finance approved your transaction "${data.description}" (KES ${data.amount}). Waiting on manager.`);
   }
   res.json(data);
 });
@@ -470,7 +451,7 @@ app.post('/api/transactions/:id/reject', requireAuth, requireRole('manager', 'fi
 
   if (error) return res.status(500).json({ error: error.message });
   await supabase.from('cst_approval_log').insert({ transaction_id: id, actor_id: req.user.id, action: 'reject', note: reason || null });
-  await notify(data.created_by, id, 'rejected', await renderTemplate('rejected', data, { reason }));
+  await notify(data.created_by, id, 'rejected', `Your transaction "${data.description}" (KES ${data.amount}) was rejected.${reason ? ' Reason: ' + reason : ''}`);
   res.json(data);
 });
 
@@ -487,7 +468,7 @@ app.post('/api/transactions/:id/pay', requireAuth, requireRole('finance', 'admin
   if (error) return res.status(500).json({ error: error.message });
   await supabase.from('cst_approval_log').insert({ transaction_id: id, actor_id: req.user.id, action: 'mark_paid' });
 
-  const receiptMsg = await renderTemplate('paid_receipt', data);
+  const receiptMsg = `Payment settled for "${data.description}" (KES ${data.amount}). Receipt available.`;
   const recipients = new Set([data.created_by, data.manager_approved_by, data.finance_approved_by].filter(Boolean));
   for (const uid of recipients) await notify(uid, id, 'paid_receipt', receiptMsg);
 
@@ -630,26 +611,7 @@ app.get('/api/users', requireAuth, requireRole('manager', 'finance', 'admin'), a
   res.json(data);
 });
 
-// ---------- Notifications (template-driven with token substitution) ----------
-async function renderTemplate(eventType, txn, extra = {}) {
-  const { data: tmpl } = await supabase.from('cst_message_templates').select('template').eq('event_type', eventType).single();
-  let site_name = '';
-  try {
-    const { data: site } = await supabase.from('cst_sites').select('name').eq('id', txn.site_id).single();
-    site_name = site ? site.name : '';
-  } catch {}
-  const tokens = {
-    description: txn.description,
-    amount: 'KES ' + Number(txn.amount).toLocaleString(undefined, { minimumFractionDigits: 2 }),
-    site_name,
-    paid_date: txn.paid_at ? new Date(txn.paid_at).toISOString().slice(0, 10) : '',
-    reason_suffix: extra.reason ? ' Reason: ' + extra.reason : ''
-  };
-  let text = tmpl ? tmpl.template : `${eventType}: {{description}} ({{amount}})`;
-  for (const [k, v] of Object.entries(tokens)) text = text.split('{{' + k + '}}').join(v || '');
-  return text;
-}
-
+// ---------- Notifications ----------
 async function notify(userId, transactionId, type, message) {
   if (!userId) return;
   await supabase.from('cst_notifications').insert({ user_id: userId, transaction_id: transactionId, type, message });
@@ -746,21 +708,6 @@ app.delete('/api/transaction-vendors/:linkId', requireAuth, requireRole('manager
   const { error } = await supabase.from('cst_transaction_vendors').delete().eq('id', req.params.linkId);
   if (error) return res.status(500).json({ error: error.message });
   res.json({ ok: true });
-});
-
-// ---------- Message templates (custom tokens: {{description}} {{amount}} {{site_name}} {{paid_date}} {{reason_suffix}}) ----------
-app.get('/api/templates', requireAuth, requireRole('manager', 'admin'), async (req, res) => {
-  const { data, error } = await supabase.from('cst_message_templates').select('*').order('event_type');
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
-});
-
-app.put('/api/templates/:eventType', requireAuth, requireRole('manager', 'admin'), async (req, res) => {
-  const { template } = req.body;
-  if (!template) return res.status(400).json({ error: 'template is required' });
-  const { data, error } = await supabase.from('cst_message_templates').update({ template, updated_at: new Date().toISOString() }).eq('event_type', req.params.eventType).select().single();
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
 });
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
