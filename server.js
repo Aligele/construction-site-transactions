@@ -171,16 +171,34 @@ async function renderDashboard(){
 
   const content = document.getElementById('content');
   let contentHtml = '<div class="card"><div class="topbar"><h2>Notifications</h2><span class="muted" id="notifCount"></span></div><div id="notifList" class="muted">Loading...</div></div>';
-  contentHtml += '<div class="card"><div class="topbar"><h2>Transactions</h2><div>'+(['manager','finance','admin'].includes(user.role)?'<button id="exportBtn" class="secondary">Download Excel</button>':'')+(['manager','admin'].includes(user.role)?' <button id="clearAllBtn" class="danger">Clear all data</button>':'')+'</div></div><div id="table"></div></div>';
+  contentHtml += '<div class="card"><h2>Overview</h2><div id="summaryBox" class="muted">Loading...</div></div>';
+  contentHtml += '<div class="card"><div class="topbar"><h2>Transactions</h2><div>'+(['manager','finance','admin'].includes(user.role)?'<button id="exportBtn" class="secondary">Download Excel</button>':'')+(['manager','admin'].includes(user.role)?' <button id="clearAllBtn" class="danger">Clear all data</button>':'')+'</div></div>' +
+    '<div class="row" style="margin-top:6px;"><input id="filterSearch" placeholder="Search description..." /><select id="filterStatus"><option value="">All statuses</option><option value="pending">Pending</option><option value="approved">Approved</option><option value="paid">Paid</option><option value="rejected">Rejected</option></select><input id="filterFrom" type="date" /><input id="filterTo" type="date" /><button class="secondary" id="filterApply">Filter</button></div>' +
+    '<div id="table"></div><div id="pagination" class="row" style="margin-top:10px;justify-content:flex-end;"></div></div>';
   if (user.role==='clerk' || user.role==='admin') {
     contentHtml += '<div class="card"><h2>Log a transaction</h2><div class="row"><div><label>Site ID</label><input id="site_id" placeholder="site UUID" value="'+(user.site_id||'')+'" /></div><div><label>Category</label><select id="category"><option value="materials">Materials</option><option value="labor">Labor</option><option value="equipment">Equipment</option><option value="fuel">Fuel</option><option value="other">Other</option></select></div><div><label>Amount (KES)</label><input id="amount" type="number" step="0.01" /></div></div><label>Description</label><textarea id="description" rows="2" style="width:100%;"></textarea><div style="margin-top:12px;"><button id="submitTxn">Submit</button></div><div class="error" id="submitErr"></div></div>';
   }
+  contentHtml += '<div class="card"><h2>Change password</h2><div class="row"><div><label>Current password</label><input id="curPw" type="password" /></div><div><label>New password</label><input id="newPw" type="password" /></div></div><div style="margin-top:12px;"><button id="changePwBtn">Update password</button></div><div class="error" id="changePwErr"></div><div id="changePwOk" class="muted"></div></div>';
   if (user.role==='manager' || user.role==='admin') {
     contentHtml += '<div class="card"><h2>Add a clerk or finance login</h2><div class="row"><div><label>Full name</label><input id="new_name" placeholder="Full name" /></div><div><label>Email</label><input id="new_email" type="email" placeholder="person@example.com" /></div><div><label>Role</label><select id="new_role"><option value="clerk">Clerk</option><option value="finance">Finance</option></select></div></div><div style="margin-top:12px;"><button id="createUserBtn">Create login</button></div><div class="error" id="createUserErr"></div><div id="createUserResult"></div></div>';
+    contentHtml += '<div class="card"><h2>Team logins</h2><div id="userList" class="muted">Loading...</div></div>';
   }
   content.innerHTML = contentHtml;
 
   loadNotifications();
+  loadSummary();
+  if (document.getElementById('userList')) loadUsers();
+
+  document.getElementById('changePwBtn').onclick = async () => {
+    const current_password = document.getElementById('curPw').value;
+    const new_password = document.getElementById('newPw').value;
+    try {
+      await api('/auth/change-password', {method:'POST', body: JSON.stringify({current_password, new_password})});
+      document.getElementById('changePwErr').textContent = '';
+      document.getElementById('changePwOk').textContent = 'Password updated.';
+      document.getElementById('curPw').value=''; document.getElementById('newPw').value='';
+    } catch(e) { document.getElementById('changePwErr').textContent = e.message; document.getElementById('changePwOk').textContent=''; }
+  };
 
   if (document.getElementById('createUserBtn')) {
     document.getElementById('createUserBtn').onclick = async () => {
@@ -192,6 +210,7 @@ async function renderDashboard(){
         document.getElementById('createUserErr').textContent = '';
         document.getElementById('createUserResult').innerHTML = '<div class="card" style="background:#e2f1e8;margin-top:10px;"><strong>Login created.</strong><br/>Email: '+result.email+'<br/>Temporary password: <strong>'+result.temporary_password+'</strong><br/><span class="muted">Share this with them directly — it will not be shown again.</span></div>';
         document.getElementById('new_name').value=''; document.getElementById('new_email').value='';
+        loadUsers();
       } catch(e) { document.getElementById('createUserErr').textContent = e.message; }
     };
   }
@@ -202,7 +221,7 @@ async function renderDashboard(){
       const category = document.getElementById('category').value;
       const amount = document.getElementById('amount').value;
       const description = document.getElementById('description').value.trim();
-      try { await api('/transactions',{method:'POST',body:JSON.stringify({site_id,category,amount,description})}); document.getElementById('description').value=''; document.getElementById('amount').value=''; loadTable(); }
+      try { await api('/transactions',{method:'POST',body:JSON.stringify({site_id,category,amount,description})}); document.getElementById('description').value=''; document.getElementById('amount').value=''; loadTable(); loadSummary(); }
       catch(e){ document.getElementById('submitErr').textContent = e.message; }
     };
   }
@@ -218,26 +237,45 @@ async function renderDashboard(){
     document.getElementById('clearAllBtn').onclick = async () => {
       if (!confirm('This will permanently delete ALL transaction data for your site. Are you sure?')) return;
       if (!confirm('Really sure? This cannot be undone.')) return;
-      try { await api('/transactions?confirm=yes', {method:'DELETE'}); loadTable(); }
+      try { await api('/transactions?confirm=yes', {method:'DELETE'}); loadTable(); loadSummary(); }
       catch(e){ alert(e.message); }
     };
   }
+  document.getElementById('filterApply').onclick = () => { tablePage = 0; loadTable(); };
   loadTable();
 }
+let tablePage = 0;
+const PAGE_SIZE = 20;
 async function loadTable(){
   const {user} = state;
-  const rows = await api('/transactions');
+  const search = document.getElementById('filterSearch') ? document.getElementById('filterSearch').value.trim() : '';
+  const status = document.getElementById('filterStatus') ? document.getElementById('filterStatus').value : '';
+  const from_date = document.getElementById('filterFrom') ? document.getElementById('filterFrom').value : '';
+  const to_date = document.getElementById('filterTo') ? document.getElementById('filterTo').value : '';
+  const params = new URLSearchParams({ limit: PAGE_SIZE, offset: tablePage*PAGE_SIZE });
+  if (search) params.set('search', search);
+  if (status) params.set('status', status);
+  if (from_date) params.set('from_date', from_date);
+  if (to_date) params.set('to_date', to_date);
+  const { rows, total } = await api('/transactions?'+params.toString());
   let html = '<table><thead><tr><th>Date</th><th>Category</th><th>Description</th><th>Amount</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
   rows.forEach(t => {
     html += '<tr><td>'+t.transaction_date+'</td><td>'+t.category+'</td><td>'+t.description+'</td><td>'+money(t.amount)+'</td><td>'+badge(t.status)+'</td><td class="actions">'+actionButtons(t,user)+' <button class="secondary" data-details="'+t.id+'">Details</button></td></tr>';
     html += '<tr id="details-'+t.id+'" style="display:none;"><td colspan="6"><div id="details-body-'+t.id+'" class="muted">Loading...</div></td></tr>';
+    html += '<tr id="edit-'+t.id+'" style="display:none;"><td colspan="6"><div class="row"><div><label>Description</label><input id="editDesc-'+t.id+'" value="'+t.description.replace(/"/g,'&quot;')+'" /></div><div><label>Amount</label><input id="editAmount-'+t.id+'" type="number" step="0.01" value="'+t.amount+'" /></div><div><label>Status</label><select id="editStatus-'+t.id+'"><option value="pending"'+(t.status==='pending'?' selected':'')+'>Pending</option><option value="approved"'+(t.status==='approved'?' selected':'')+'>Approved</option><option value="rejected"'+(t.status==='rejected'?' selected':'')+'>Rejected</option><option value="paid"'+(t.status==='paid'?' selected':'')+'>Paid</option></select></div></div><div style="margin-top:8px;"><button data-save-edit="'+t.id+'">Save</button> <button class="secondary" data-cancel-edit="'+t.id+'">Cancel</button></div></td></tr>';
   });
   html += '</tbody></table>';
   document.getElementById('table').innerHTML = html;
+
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  document.getElementById('pagination').innerHTML = '<span class="muted" style="align-self:center;">Page '+(tablePage+1)+' of '+totalPages+' ('+total+' total)</span><button class="secondary" id="prevPage" '+(tablePage===0?'disabled':'')+'>Prev</button><button class="secondary" id="nextPage" '+(tablePage>=totalPages-1?'disabled':'')+'>Next</button>';
+  const prevBtn = document.getElementById('prevPage'); if (prevBtn) prevBtn.onclick = () => { if (tablePage>0){ tablePage--; loadTable(); } };
+  const nextBtn = document.getElementById('nextPage'); if (nextBtn) nextBtn.onclick = () => { if (tablePage<totalPages-1){ tablePage++; loadTable(); } };
+
   document.querySelectorAll('[data-action]').forEach(btn => {
     btn.onclick = async () => {
       const {action,id} = btn.dataset;
-      try { await api('/transactions/'+id+'/'+action,{method:'POST',body:JSON.stringify({})}); loadTable(); }
+      try { await api('/transactions/'+id+'/'+action,{method:'POST',body:JSON.stringify({})}); loadTable(); loadSummary(); }
       catch(e){ alert(e.message); }
     };
   });
@@ -250,7 +288,7 @@ async function loadTable(){
   document.querySelectorAll('[data-delete]').forEach(btn => {
     btn.onclick = async () => {
       if (!confirm('Delete this transaction permanently? This cannot be undone.')) return;
-      try { await api('/transactions/'+btn.dataset.delete, {method:'DELETE'}); loadTable(); }
+      try { await api('/transactions/'+btn.dataset.delete, {method:'DELETE'}); loadTable(); loadSummary(); }
       catch(e){ alert(e.message); }
     };
   });
@@ -258,18 +296,19 @@ async function loadTable(){
     btn.onclick = () => toggleDetails(btn.dataset.details);
   });
   document.querySelectorAll('[data-edit]').forEach(btn => {
+    btn.onclick = () => { const row = document.getElementById('edit-'+btn.dataset.edit); row.style.display = row.style.display==='none' ? 'table-row' : 'none'; };
+  });
+  document.querySelectorAll('[data-cancel-edit]').forEach(btn => {
+    btn.onclick = () => { document.getElementById('edit-'+btn.dataset.cancelEdit).style.display = 'none'; };
+  });
+  document.querySelectorAll('[data-save-edit]').forEach(btn => {
     btn.onclick = async () => {
-      const row = rows.find(r => r.id === btn.dataset.edit);
-      const newDesc = prompt('Description:', row.description);
-      if (newDesc === null) return;
-      const newAmount = prompt('Amount (KES):', row.amount);
-      if (newAmount === null) return;
-      const newStatus = prompt('Status (pending/approved/rejected/paid):', row.status);
-      if (newStatus === null) return;
-      try {
-        await api('/transactions/'+row.id, {method:'PUT', body: JSON.stringify({description:newDesc, amount:newAmount, status:newStatus})});
-        loadTable();
-      } catch(e){ alert(e.message); }
+      const id = btn.dataset.saveEdit;
+      const description = document.getElementById('editDesc-'+id).value;
+      const amount = document.getElementById('editAmount-'+id).value;
+      const status = document.getElementById('editStatus-'+id).value;
+      try { await api('/transactions/'+id, {method:'PUT', body: JSON.stringify({description, amount, status})}); loadTable(); loadSummary(); }
+      catch(e){ alert(e.message); }
     };
   });
 }
@@ -337,6 +376,37 @@ async function toggleDetails(txnId){
     };
   } catch(e) { body.textContent = 'Could not load details: ' + e.message; }
 }
+async function loadSummary(){
+  const el = document.getElementById('summaryBox');
+  try {
+    const s = await api('/summary');
+    const cards = [
+      {label:'Pending', amt:s.pending, count:s.pending_count, color:'#d98c2b'},
+      {label:'Approved', amt:s.approved, count:s.approved_count, color:'#2f7d4f'},
+      {label:'Paid', amt:s.paid, count:s.paid_count, color:'#2f7d4f'},
+      {label:'Rejected', amt:s.rejected, count:s.rejected_count, color:'#b03a3a'}
+    ];
+    el.innerHTML = '<div class="row">' + cards.map(c =>
+      '<div style="background:#f5f6f8;border-radius:8px;padding:12px;"><div class="muted">'+c.label+' ('+c.count+')</div><div style="font-size:18px;font-weight:700;color:'+c.color+';">'+money(c.amt)+'</div></div>'
+    ).join('') + '</div>';
+  } catch(e) { el.textContent = 'Could not load summary.'; }
+}
+async function loadUsers(){
+  const el = document.getElementById('userList');
+  try {
+    const users = await api('/users');
+    if (!users.length) { el.textContent = 'No team logins yet.'; return; }
+    el.innerHTML = '<table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead><tbody>' +
+      users.map(u => '<tr><td>'+u.full_name+'</td><td>'+u.email+'</td><td style="text-transform:capitalize;">'+u.role+'</td><td>'+(u.is_active===false?'<span class="badge rejected">inactive</span>':'<span class="badge paid">active</span>')+'</td><td class="actions">'+(u.id!==state.user.id?'<button class="'+(u.is_active===false?'success':'danger')+'" data-toggle-user="'+u.id+'" data-next="'+(u.is_active===false?'true':'false')+'">'+(u.is_active===false?'Activate':'Deactivate')+'</button>':'<span class="muted">you</span>')+'</td></tr>').join('') +
+      '</tbody></table>';
+    el.querySelectorAll('[data-toggle-user]').forEach(btn => {
+      btn.onclick = async () => {
+        try { await api('/users/'+btn.dataset.toggleUser+'/status', {method:'PATCH', body: JSON.stringify({is_active: btn.dataset.next==='true'})}); loadUsers(); }
+        catch(e){ alert(e.message); }
+      };
+    });
+  } catch(e) { el.textContent = 'Could not load team logins.'; }
+}
 async function loadNotifications(){
   try {
     const notes = await api('/notifications');
@@ -358,16 +428,55 @@ render();
 app.get('/', (req, res) => res.type('html').send(INDEX_HTML));
 
 // ---------- Auth routes ----------
+const MAX_FAILED_ATTEMPTS = 5;
+const LOCKOUT_MINUTES = 15;
+
 app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
 
   const { data: user, error } = await supabase.from('cst_users').select('*').eq('email', email.toLowerCase().trim()).single();
-  if (error || !user || !bcrypt.compareSync(password, user.password_hash)) {
+  if (error || !user) return res.status(401).json({ error: 'Invalid email or password' });
+
+  if (user.is_active === false) return res.status(403).json({ error: 'This account has been deactivated. Contact your manager.' });
+
+  if (user.locked_until && new Date(user.locked_until) > new Date()) {
+    const mins = Math.ceil((new Date(user.locked_until) - new Date()) / 60000);
+    return res.status(423).json({ error: `Too many failed attempts. Try again in ${mins} minute(s).` });
+  }
+
+  if (!bcrypt.compareSync(password, user.password_hash)) {
+    const attempts = (user.failed_attempts || 0) + 1;
+    const updates = { failed_attempts: attempts };
+    if (attempts >= MAX_FAILED_ATTEMPTS) {
+      updates.locked_until = new Date(Date.now() + LOCKOUT_MINUTES * 60000).toISOString();
+      updates.failed_attempts = 0;
+    }
+    await supabase.from('cst_users').update(updates).eq('id', user.id);
+    if (updates.locked_until) return res.status(423).json({ error: `Too many failed attempts. Account locked for ${LOCKOUT_MINUTES} minutes.` });
     return res.status(401).json({ error: 'Invalid email or password' });
   }
+
+  if (user.failed_attempts || user.locked_until) {
+    await supabase.from('cst_users').update({ failed_attempts: 0, locked_until: null }).eq('id', user.id);
+  }
+
   const token = signToken(user);
   res.json({ token, user: { id: user.id, full_name: user.full_name, email: user.email, role: user.role, site_id: user.site_id } });
+});
+
+app.post('/api/auth/change-password', requireAuth, async (req, res) => {
+  const { current_password, new_password } = req.body;
+  if (!current_password || !new_password) return res.status(400).json({ error: 'current_password and new_password are required' });
+  if (new_password.length < 8) return res.status(400).json({ error: 'New password must be at least 8 characters' });
+
+  const { data: user, error } = await supabase.from('cst_users').select('*').eq('id', req.user.id).single();
+  if (error || !user || !bcrypt.compareSync(current_password, user.password_hash)) {
+    return res.status(401).json({ error: 'Current password is incorrect' });
+  }
+  const { error: updErr } = await supabase.from('cst_users').update({ password_hash: bcrypt.hashSync(new_password, 10) }).eq('id', user.id);
+  if (updErr) return res.status(500).json({ error: updErr.message });
+  res.json({ ok: true });
 });
 
 // ---------- Transaction routes ----------
@@ -389,14 +498,35 @@ app.post('/api/transactions', requireAuth, requireRole('clerk', 'admin'), async 
 });
 
 app.get('/api/transactions', requireAuth, async (req, res) => {
-  const { status, site_id, category } = req.query;
-  let query = supabase.from('cst_transactions').select('*').order('created_at', { ascending: false });
+  const { status, site_id, category, search, from_date, to_date, limit, offset } = req.query;
+  let query = supabase.from('cst_transactions').select('*', { count: 'exact' }).order('created_at', { ascending: false });
   if (status) query = query.eq('status', status);
   if (site_id) query = query.eq('site_id', site_id);
   if (category) query = query.eq('category', category);
+  if (search) query = query.ilike('description', `%${search}%`);
+  if (from_date) query = query.gte('transaction_date', from_date);
+  if (to_date) query = query.lte('transaction_date', to_date);
+  const lim = Math.min(parseInt(limit) || 50, 200);
+  const off = parseInt(offset) || 0;
+  query = query.range(off, off + lim - 1);
+  const { data, error, count } = await query;
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ rows: data, total: count });
+});
+
+app.get('/api/summary', requireAuth, async (req, res) => {
+  let query = supabase.from('cst_transactions').select('status, amount, category');
+  if (req.user.role !== 'admin' && req.user.site_id) query = query.eq('site_id', req.user.site_id);
   const { data, error } = await query;
   if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
+
+  const summary = { pending: 0, approved: 0, paid: 0, rejected: 0, pending_count: 0, approved_count: 0, paid_count: 0, rejected_count: 0, by_category: {} };
+  for (const t of data) {
+    const amt = Number(t.amount) || 0;
+    if (summary[t.status] !== undefined) { summary[t.status] += amt; summary[t.status + '_count']++; }
+    summary.by_category[t.category] = (summary.by_category[t.category] || 0) + amt;
+  }
+  res.json(summary);
 });
 
 app.post('/api/transactions/:id/approve/manager', requireAuth, requireRole('manager', 'admin'), async (req, res) => {
@@ -608,17 +738,43 @@ app.post('/api/users', requireAuth, requireRole('manager', 'admin'), async (req,
 });
 
 app.get('/api/users', requireAuth, requireRole('manager', 'finance', 'admin'), async (req, res) => {
-  let query = supabase.from('cst_users').select('id, full_name, email, role, site_id, created_at').order('created_at', { ascending: false });
+  let query = supabase.from('cst_users').select('id, full_name, email, role, site_id, is_active, created_at').order('created_at', { ascending: false });
   if (req.user.role !== 'admin') query = query.eq('site_id', req.user.site_id);
   const { data, error } = await query;
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
 
-// ---------- Notifications ----------
+app.patch('/api/users/:id/status', requireAuth, requireRole('manager', 'admin'), async (req, res) => {
+  const { is_active } = req.body;
+  if (typeof is_active !== 'boolean') return res.status(400).json({ error: 'is_active (boolean) is required' });
+  if (req.params.id === req.user.id) return res.status(400).json({ error: "You can't deactivate your own account" });
+
+  const { data, error } = await supabase.from('cst_users').update({ is_active }).eq('id', req.params.id).select('id, full_name, email, role, is_active').single();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: 'User not found' });
+  res.json(data);
+});
+
+// ---------- Notifications (in-app + real email via Resend) ----------
+async function sendEmail(to, subject, text) {
+  if (!process.env.RESEND_API_KEY || !to) return;
+  try {
+    await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + process.env.RESEND_API_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: 'Site Transactions <notifications@cxm.co.ke>', to: [to], subject, text })
+    });
+  } catch (e) { console.error('email send failed:', e.message); }
+}
+
 async function notify(userId, transactionId, type, message) {
   if (!userId) return;
   await supabase.from('cst_notifications').insert({ user_id: userId, transaction_id: transactionId, type, message });
+  try {
+    const { data: u } = await supabase.from('cst_users').select('email, full_name').eq('id', userId).single();
+    if (u && u.email) await sendEmail(u.email, 'Site Transactions update', message);
+  } catch {}
 }
 
 app.get('/api/notifications', requireAuth, async (req, res) => {
