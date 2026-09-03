@@ -143,6 +143,7 @@ async function renderDashboard(){
         '<div class="brand"><div class="brand-logo">'+TRUCK_SVG+'</div><div><div class="brand-title">Site Transactions</div><div class="brand-sub">Construction Portal</div></div></div>' +
         '<div class="nav-section-label">MAIN</div>' +
         '<a class="nav-item active" id="navDashboard"><span class="nav-icon">&#8962;</span> Dashboard</a>' +
+        '<a class="nav-item" id="navTransactions"><span class="nav-icon">&#128203;</span> Transactions</a>' +
         '<div class="nav-section-label">ACCOUNT</div>' +
         '<a class="nav-item" id="navNotifications"><span class="nav-icon">&#128276;</span> Notifications</a>' +
         '<a class="nav-item" id="navLogout"><span class="nav-icon">&#8618;</span> Log out</a>' +
@@ -161,8 +162,11 @@ async function renderDashboard(){
   document.getElementById('menuBtn').onclick = () => { sidebar.classList.toggle('open'); overlay.classList.toggle('open'); };
   overlay.onclick = () => { sidebar.classList.remove('open'); overlay.classList.remove('open'); };
   document.getElementById('navLogout').onclick = logout;
-  document.getElementById('navDashboard').onclick = () => { document.getElementById('content').scrollIntoView({behavior:'smooth'}); sidebar.classList.remove('open'); overlay.classList.remove('open'); };
-  document.getElementById('navNotifications').onclick = () => { const n=document.getElementById('notifList'); if(n) n.scrollIntoView({behavior:'smooth',block:'center'}); sidebar.classList.remove('open'); overlay.classList.remove('open'); };
+  function setActiveNav(navEl){ document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active')); navEl.classList.add('active'); }
+  function closeSidebar(){ sidebar.classList.remove('open'); overlay.classList.remove('open'); }
+  document.getElementById('navDashboard').onclick = function(){ setActiveNav(this); document.getElementById('content').scrollIntoView({behavior:'smooth'}); closeSidebar(); };
+  document.getElementById('navTransactions').onclick = function(){ setActiveNav(this); const t=document.getElementById('table'); if(t) t.scrollIntoView({behavior:'smooth',block:'start'}); closeSidebar(); };
+  document.getElementById('navNotifications').onclick = function(){ setActiveNav(this); const n=document.getElementById('notifList'); if(n) n.scrollIntoView({behavior:'smooth',block:'center'}); closeSidebar(); };
   document.getElementById('bellIcon').onclick = document.getElementById('navNotifications').onclick;
 
   const content = document.getElementById('content');
