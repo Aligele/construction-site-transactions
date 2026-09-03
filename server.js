@@ -856,23 +856,38 @@ app.get('/api/export', requireAuth, requireRole('manager', 'finance', 'admin'), 
   workbook.created = new Date();
 
   const paid = data.filter(t => t.status === 'paid');
-  const pending = data.filter(t => t.status === 'pending' || t.status === 'approved');
+  const pendingOnly = data.filter(t => t.status === 'pending');
+  const approved = data.filter(t => t.status === 'approved');
   const rejected = data.filter(t => t.status === 'rejected');
+  const pendingAndApproved = data.filter(t => t.status === 'pending' || t.status === 'approved');
 
   const paidSheet = workbook.addWorksheet('Paid'); styleSheet(paidSheet); paidSheet.addRows(paid);
-  const pendingSheet = workbook.addWorksheet('Pending'); styleSheet(pendingSheet); pendingSheet.addRows(pending);
+  const pendingSheet = workbook.addWorksheet('Pending'); styleSheet(pendingSheet); pendingSheet.addRows(pendingAndApproved);
   const rejectedSheet = workbook.addWorksheet('Rejected'); styleSheet(rejectedSheet); rejectedSheet.addRows(rejected);
 
+  const totalPaid = paid.reduce((s, t) => s + Number(t.amount), 0);
+  const totalPending = pendingOnly.reduce((s, t) => s + Number(t.amount), 0);
+  const totalRejected = rejected.reduce((s, t) => s + Number(t.amount), 0);
+  const remaining = approved.reduce((s, t) => s + Number(t.amount), 0);
+
   const summarySheet = workbook.addWorksheet('Summary');
-  summarySheet.columns = [{ header: 'Metric', key: 'metric', width: 24 }, { header: 'Value', key: 'value', width: 18 }];
+  summarySheet.columns = [{ header: 'Metric', key: 'metric', width: 26 }, { header: 'Value', key: 'value', width: 18 }];
   summarySheet.getRow(1).font = { bold: true };
   summarySheet.addRows([
-    { metric: 'Total Paid', value: paid.reduce((s, t) => s + Number(t.amount), 0) },
-    { metric: 'Total Pending', value: pending.reduce((s, t) => s + Number(t.amount), 0) },
-    { metric: 'Total Rejected', value: rejected.reduce((s, t) => s + Number(t.amount), 0) },
-    { metric: 'Count Paid', value: paid.length },
-    { metric: 'Count Pending', value: pending.length }
+    { metric: 'Total Paid', value: totalPaid },
+    { metric: 'Total Pending', value: totalPending },
+    { metric: 'Total Rejected', value: totalRejected },
+    { metric: 'Remaining (Approved, awaiting payment)', value: remaining },
+    { metric: 'Pending (count)', value: pendingOnly.length },
+    { metric: 'Paid (count)', value: paid.length },
+    { metric: 'Approved (count)', value: approved.length },
+    { metric: 'Rejected (count)', value: rejected.length }
   ]);
+  summarySheet.getColumn('value').numFmt = '#,##0.00';
+  summarySheet.getCell('B6').numFmt = '0';
+  summarySheet.getCell('B7').numFmt = '0';
+  summarySheet.getCell('B8').numFmt = '0';
+  summarySheet.getCell('B9').numFmt = '0';
 
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', `attachment; filename="site-transactions-${new Date().toISOString().slice(0, 10)}.xlsx"`);
