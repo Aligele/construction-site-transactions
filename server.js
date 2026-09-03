@@ -842,11 +842,12 @@ app.patch('/api/users/:id/status', requireAuth, requireRole('manager', 'admin'),
 async function sendEmail(to, subject, text) {
   if (!process.env.RESEND_API_KEY || !to) return;
   try {
-    await fetch('https://api.resend.com/emails', {
+    const r = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + process.env.RESEND_API_KEY, 'Content-Type': 'application/json' },
       body: JSON.stringify({ from: 'Site Transactions <notifications@cxm.co.ke>', to: [to], subject, text })
     });
+    if (!r.ok) { const body = await r.text(); console.error('Resend rejected email:', r.status, body); }
   } catch (e) { console.error('email send failed:', e.message); }
 }
 
@@ -954,6 +955,22 @@ app.delete('/api/transaction-vendors/:linkId', requireAuth, requireRole('manager
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 app.get('/api/debug/email-config', (req, res) => res.json({ resend_key_present: !!process.env.RESEND_API_KEY, resend_key_length: process.env.RESEND_API_KEY ? process.env.RESEND_API_KEY.length : 0 }));
+app.get('/api/debug/test-email', async (req, res) => {
+  const to = req.query.to;
+  if (!to) return res.status(400).json({ error: 'Add ?to=your@email.com to the URL' });
+  if (!process.env.RESEND_API_KEY) return res.json({ sent: false, reason: 'RESEND_API_KEY not set in this environment' });
+  try {
+    const r = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + process.env.RESEND_API_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: 'Site Transactions <notifications@cxm.co.ke>', to: [to], subject: 'Test email', text: 'This is a test email from the debug endpoint.' })
+    });
+    const body = await r.text();
+    res.json({ sent: r.ok, status: r.status, response: body });
+  } catch (e) {
+    res.json({ sent: false, error: e.message });
+  }
+});
 
 const PORT = process.env.PORT || 3000;
 if (require.main === module) {
