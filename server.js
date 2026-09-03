@@ -3,6 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 const ExcelJS = require('exceljs');
 const { createClient } = require('@supabase/supabase-js');
 
@@ -126,12 +127,22 @@ function money(n){ return 'KES ' + Number(n).toLocaleString(undefined,{minimumFr
 function badge(s){ return '<span class="badge '+s+'">'+s+'</span>'; }
 function render(){ state.token ? renderDashboard() : renderLogin(); }
 function renderLogin(){
-  appEl.innerHTML = '<div class="card" style="max-width:360px;margin:60px auto;"><div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;"><div class="brand-logo" style="box-shadow:none;background:#eaf7ee;">'+TRUCK_SVG+'</div><div><h1 style="margin:0;">Site Transactions</h1><p class="muted" style="margin:0;">Construction Portal</p></div></div><p class="muted">Sign in to continue</p><label>Email</label><input id="email" type="email" placeholder="you@example.com" /><label>Password</label><input id="password" type="password" placeholder="********" /><div style="margin-top:16px;"><button id="loginBtn" style="width:100%;">Log in</button></div><div class="error" id="err"></div></div>';
+  appEl.innerHTML = '<div class="card" style="max-width:360px;margin:60px auto;"><div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;"><div class="brand-logo" style="box-shadow:none;background:#eaf7ee;">'+TRUCK_SVG+'</div><div><h1 style="margin:0;">Site Transactions</h1><p class="muted" style="margin:0;">Construction Portal</p></div></div><p class="muted">Sign in to continue</p><label>Email</label><input id="email" type="email" placeholder="you@example.com" /><label>Password</label><input id="password" type="password" placeholder="********" /><div style="margin-top:16px;"><button id="loginBtn" style="width:100%;">Log in</button></div><p style="margin-top:10px;text-align:center;"><a href="#" id="forgotLink" style="font-size:13px;color:#1f2d3d;">Forgot password?</a></p><div class="error" id="err"></div><div class="muted" id="forgotMsg"></div></div>';
   document.getElementById('loginBtn').onclick = async () => {
     const email = document.getElementById('email').value.trim();
     const password = document.getElementById('password').value;
     try { const {token,user} = await api('/auth/login',{method:'POST',body:JSON.stringify({email,password})}); save(token,user); render(); }
     catch(e){ document.getElementById('err').textContent = e.message; }
+  };
+  document.getElementById('forgotLink').onclick = async (ev) => {
+    ev.preventDefault();
+    const email = document.getElementById('email').value.trim();
+    if (!email) { document.getElementById('err').textContent = 'Enter your email above first, then tap "Forgot password?".'; return; }
+    try {
+      await api('/auth/forgot-password', {method:'POST', body: JSON.stringify({email})});
+      document.getElementById('err').textContent = '';
+      document.getElementById('forgotMsg').textContent = 'If that email is registered, a reset link has been sent — check your inbox.';
+    } catch(e) { document.getElementById('err').textContent = e.message; }
   };
 }
 async function renderDashboard(){
@@ -477,6 +488,77 @@ app.post('/api/auth/change-password', requireAuth, async (req, res) => {
   const { error: updErr } = await supabase.from('cst_users').update({ password_hash: bcrypt.hashSync(new_password, 10) }).eq('id', user.id);
   if (updErr) return res.status(500).json({ error: updErr.message });
   res.json({ ok: true });
+});
+
+// ---------- Forgot / reset password ----------
+app.post('/api/auth/forgot-password', async (req, res) => {
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ error: 'email is required' });
+
+  const { data: user } = await supabase.from('cst_users').select('id, email, full_name').eq('email', email.toLowerCase().trim()).single();
+  // Always respond the same way, whether or not the email exists, to avoid leaking which emails are registered.
+  if (user) {
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+    await supabase.from('cst_users').update({
+      reset_token_hash: tokenHash,
+      reset_token_expires: new Date(Date.now() + 30 * 60000).toISOString()
+    }).eq('id', user.id);
+
+    const resetUrl = `${req.protocol}://${req.get('host')}/reset?token=${rawToken}`;
+    await sendEmail(user.email, 'Reset your Site Transactions password',
+      `Hi ${user.full_name},\n\nClick the link below to reset your password. This link expires in 30 minutes.\n\n${resetUrl}\n\nIf you didn't request this, you can ignore this email.`);
+  }
+  res.json({ ok: true, message: 'If that email is registered, a reset link has been sent.' });
+});
+
+app.post('/api/auth/reset-password', async (req, res) => {
+  const { token, new_password } = req.body;
+  if (!token || !new_password) return res.status(400).json({ error: 'token and new_password are required' });
+  if (new_password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
+
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+  const { data: user, error } = await supabase.from('cst_users').select('*').eq('reset_token_hash', tokenHash).single();
+  if (error || !user || !user.reset_token_expires || new Date(user.reset_token_expires) < new Date()) {
+    return res.status(400).json({ error: 'This reset link is invalid or has expired. Request a new one.' });
+  }
+
+  await supabase.from('cst_users').update({
+    password_hash: bcrypt.hashSync(new_password, 10),
+    reset_token_hash: null,
+    reset_token_expires: null,
+    failed_attempts: 0,
+    locked_until: null
+  }).eq('id', user.id);
+
+  res.json({ ok: true });
+});
+
+app.get('/reset', (req, res) => {
+  const token = (req.query.token || '').replace(/[^a-f0-9]/gi, '');
+  res.type('html').send(`<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Reset password</title>
+  <style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;background:#f5f6f8;color:#1f2d3d;margin:0;}
+  .card{max-width:360px;margin:60px auto;background:#fff;border:1px solid #dde1e6;border-radius:10px;padding:20px;}
+  label{display:block;font-size:13px;margin:10px 0 4px;font-weight:600;}
+  input{width:100%;font-size:14px;padding:9px 10px;border-radius:6px;border:1px solid #dde1e6;box-sizing:border-box;}
+  button{width:100%;margin-top:16px;background:#1f2d3d;color:#fff;border:none;padding:10px;border-radius:6px;font-weight:600;cursor:pointer;}
+  .error{color:#b03a3a;font-size:13px;margin-top:8px;} .ok{color:#2f7d4f;font-size:13px;margin-top:8px;}</style></head>
+  <body><div class="card"><h2>Reset your password</h2>
+  <label>New password</label><input id="pw" type="password" placeholder="At least 8 characters" />
+  <button id="btn">Set new password</button>
+  <div class="error" id="err"></div><div class="ok" id="ok"></div>
+  <script>
+  document.getElementById('btn').onclick = async () => {
+    const new_password = document.getElementById('pw').value;
+    try {
+      const res = await fetch('/api/auth/reset-password', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({token:'${token}', new_password})});
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || 'Could not reset password');
+      document.getElementById('err').textContent='';
+      document.getElementById('ok').textContent='Password updated. You can close this page and log in.';
+    } catch(e) { document.getElementById('err').textContent = e.message; }
+  };
+  </script></div></body></html>`);
 });
 
 // ---------- Transaction routes ----------
