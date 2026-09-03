@@ -505,7 +505,8 @@ app.post('/api/auth/forgot-password', async (req, res) => {
       reset_token_expires: new Date(Date.now() + 30 * 60000).toISOString()
     }).eq('id', user.id);
 
-    const resetUrl = `${req.protocol}://${req.get('host')}/reset?token=${rawToken}`;
+    const proto = req.headers['x-forwarded-proto'] || req.protocol;
+    const resetUrl = `${proto}://${req.get('host')}/reset?token=${rawToken}`;
     await sendEmail(user.email, 'Reset your Site Transactions password',
       `Hi ${user.full_name},\n\nClick the link below to reset your password. This link expires in 30 minutes.\n\n${resetUrl}\n\nIf you didn't request this, you can ignore this email.`);
   }
@@ -954,23 +955,6 @@ app.delete('/api/transaction-vendors/:linkId', requireAuth, requireRole('manager
 });
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
-app.get('/api/debug/email-config', (req, res) => res.json({ resend_key_present: !!process.env.RESEND_API_KEY, resend_key_length: process.env.RESEND_API_KEY ? process.env.RESEND_API_KEY.length : 0 }));
-app.get('/api/debug/test-email', async (req, res) => {
-  const to = req.query.to;
-  if (!to) return res.status(400).json({ error: 'Add ?to=your@email.com to the URL' });
-  if (!process.env.RESEND_API_KEY) return res.json({ sent: false, reason: 'RESEND_API_KEY not set in this environment' });
-  try {
-    const r = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + process.env.RESEND_API_KEY, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from: 'Site Transactions <notifications@cxm.co.ke>', to: [to], subject: 'Test email', text: 'This is a test email from the debug endpoint.' })
-    });
-    const body = await r.text();
-    res.json({ sent: r.ok, status: r.status, response: body });
-  } catch (e) {
-    res.json({ sent: false, error: e.message });
-  }
-});
 
 const PORT = process.env.PORT || 3000;
 if (require.main === module) {
