@@ -187,7 +187,7 @@ async function renderDashboard(){
     '<div class="row" style="margin-top:6px;"><input id="filterSearch" placeholder="Search description..." /><select id="filterStatus"><option value="">All statuses</option><option value="pending">Pending</option><option value="approved">Approved</option><option value="paid">Paid</option><option value="rejected">Rejected</option></select><input id="filterFrom" type="date" /><input id="filterTo" type="date" /><button class="secondary" id="filterApply">Filter</button></div>' +
     '<div id="table"></div><div id="pagination" class="row" style="margin-top:10px;justify-content:flex-end;"></div></div>';
   if (user.role==='clerk' || user.role==='admin') {
-    contentHtml += '<div class="card"><h2>Log a transaction</h2><div class="row"><div><label>Site ID</label><input id="site_id" placeholder="site UUID" value="'+(user.site_id||'')+'" /></div><div><label>Category</label><select id="category"><option value="materials">Materials</option><option value="labor">Labor</option><option value="equipment">Equipment</option><option value="fuel">Fuel</option><option value="other">Other</option></select></div><div><label>Amount (KES)</label><input id="amount" type="number" step="0.01" /></div></div><label>Description</label><textarea id="description" rows="2" style="width:100%;"></textarea><div style="margin-top:12px;"><button id="submitTxn">Submit</button></div><div class="error" id="submitErr"></div></div>';
+    contentHtml += '<div class="card"><h2>Log transactions</h2><p class="muted">Add materials, labor, fuel, etc. as separate line items, then submit them together — the total goes to your manager and finance in one notification.</p><div class="row"><div><label>Site ID</label><input id="site_id" placeholder="site UUID" value="'+(user.site_id||'')+'" /></div></div><div id="itemRows"></div><div style="margin-top:8px;"><button class="secondary" id="addItemBtn" type="button">+ Add item</button></div><div class="topbar" style="margin-top:14px;"><strong>Total: <span id="batchTotal">KES 0.00</span></strong><button id="submitBatch">Submit all</button></div><div class="error" id="submitErr"></div></div>';
   }
   contentHtml += '<div class="card"><h2>Change password</h2><div class="row"><div><label>Current password</label><input id="curPw" type="password" /></div><div><label>New password</label><input id="newPw" type="password" /></div></div><div style="margin-top:12px;"><button id="changePwBtn">Update password</button></div><div class="error" id="changePwErr"></div><div id="changePwOk" class="muted"></div></div>';
   if (user.role==='manager' || user.role==='admin') {
@@ -226,14 +226,55 @@ async function renderDashboard(){
     };
   }
 
-  if (document.getElementById('submitTxn')) {
-    document.getElementById('submitTxn').onclick = async () => {
+  if (document.getElementById('itemRows')) {
+    let itemCounter = 0;
+    function itemRowHtml(n){
+      return '<div class="row" id="itemRow-'+n+'" style="align-items:flex-end;">' +
+        '<div><label>Category</label><select id="itemCat-'+n+'"><option value="materials">Materials</option><option value="labor">Labor</option><option value="equipment">Equipment</option><option value="fuel">Fuel</option><option value="other">Other</option></select></div>' +
+        '<div style="flex:2;"><label>Description</label><input id="itemDesc-'+n+'" placeholder="What was this for?" /></div>' +
+        '<div><label>Amount (KES)</label><input id="itemAmt-'+n+'" type="number" step="0.01" data-item-amt /></div>' +
+        '<div><button class="danger" type="button" data-remove-item="'+n+'" style="padding:9px 10px;">&times;</button></div>' +
+      '</div>';
+    }
+    function addItemRow(){
+      itemCounter++;
+      document.getElementById('itemRows').insertAdjacentHTML('beforeend', itemRowHtml(itemCounter));
+      const removeBtn = document.querySelector('[data-remove-item="'+itemCounter+'"]');
+      removeBtn.onclick = () => { document.getElementById('itemRow-'+itemCounter).remove(); updateBatchTotal(); };
+      document.getElementById('itemAmt-'+itemCounter).addEventListener('input', updateBatchTotal);
+    }
+    function updateBatchTotal(){
+      let total = 0;
+      document.querySelectorAll('[data-item-amt]').forEach(inp => { total += Number(inp.value) || 0; });
+      document.getElementById('batchTotal').textContent = money(total);
+    }
+    document.getElementById('addItemBtn').onclick = addItemRow;
+    addItemRow(); // start with one row
+
+    document.getElementById('submitBatch').onclick = async () => {
       const site_id = document.getElementById('site_id').value.trim();
-      const category = document.getElementById('category').value;
-      const amount = document.getElementById('amount').value;
-      const description = document.getElementById('description').value.trim();
-      try { await api('/transactions',{method:'POST',body:JSON.stringify({site_id,category,amount,description})}); document.getElementById('description').value=''; document.getElementById('amount').value=''; loadTable(); loadSummary(); }
-      catch(e){ document.getElementById('submitErr').textContent = e.message; }
+      const rows = document.querySelectorAll('#itemRows > div');
+      const items = [];
+      let hasError = false;
+      rows.forEach(row => {
+        const n = row.id.replace('itemRow-','');
+        const category = document.getElementById('itemCat-'+n).value;
+        const description = document.getElementById('itemDesc-'+n).value.trim();
+        const amount = document.getElementById('itemAmt-'+n).value;
+        if (!description || !amount) { hasError = true; return; }
+        items.push({category, description, amount});
+      });
+      if (!site_id) { document.getElementById('submitErr').textContent = 'Site ID is required.'; return; }
+      if (hasError || items.length === 0) { document.getElementById('submitErr').textContent = 'Fill in description and amount for every item.'; return; }
+      try {
+        await api('/batches', {method:'POST', body: JSON.stringify({site_id, items})});
+        document.getElementById('submitErr').textContent = '';
+        document.getElementById('itemRows').innerHTML = '';
+        itemCounter = 0;
+        addItemRow();
+        updateBatchTotal();
+        loadTable(); loadSummary();
+      } catch(e){ document.getElementById('submitErr').textContent = e.message; }
     };
   }
   if (document.getElementById('exportBtn')) {
@@ -560,6 +601,42 @@ app.get('/reset', (req, res) => {
     } catch(e) { document.getElementById('err').textContent = e.message; }
   };
   </script></div></body></html>`);
+});
+
+// ---------- Batch submission (multiple line items at once, e.g. materials + labor + fuel) ----------
+app.post('/api/batches', requireAuth, requireRole('clerk', 'admin'), async (req, res) => {
+  const { site_id, items } = req.body;
+  if (!site_id || !Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({ error: 'site_id and a non-empty items array are required' });
+  }
+  for (const item of items) {
+    if (!item.category || !item.description || !item.amount) {
+      return res.status(400).json({ error: 'Each item needs category, description and amount' });
+    }
+    if (!CATEGORIES.includes(item.category)) return res.status(400).json({ error: `category must be one of: ${CATEGORIES.join(', ')}` });
+  }
+
+  const total = items.reduce((s, i) => s + Number(i.amount), 0);
+  const { data: batch, error: batchErr } = await supabase.from('cst_batches').insert({
+    site_id, created_by: req.user.id, item_count: items.length, total_amount: total
+  }).select().single();
+  if (batchErr) return res.status(500).json({ error: batchErr.message });
+
+  const rows = items.map(i => ({
+    site_id, category: i.category, description: i.description, amount: i.amount,
+    transaction_date: i.transaction_date || new Date().toISOString().slice(0, 10),
+    created_by: req.user.id, batch_id: batch.id
+  }));
+  const { data: txns, error: txnErr } = await supabase.from('cst_transactions').insert(rows).select();
+  if (txnErr) return res.status(500).json({ error: txnErr.message });
+
+  // Notify every manager and finance user at this site with the batch total.
+  const { data: recipients } = await supabase.from('cst_users').select('id').eq('site_id', site_id).in('role', ['manager', 'finance']);
+  const itemList = items.map(i => `${i.category}: ${i.description} (KES ${Number(i.amount).toLocaleString()})`).join('; ');
+  const msg = `New batch from a clerk: ${items.length} items totaling KES ${total.toLocaleString(undefined, { minimumFractionDigits: 2 })}. Items: ${itemList}`;
+  for (const r of (recipients || [])) await notify(r.id, null, 'batch_submitted', msg);
+
+  res.status(201).json({ batch, transactions: txns });
 });
 
 // ---------- Transaction routes ----------
