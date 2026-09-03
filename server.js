@@ -953,6 +953,7 @@ app.delete('/api/transaction-vendors/:linkId', requireAuth, requireRole('manager
 });
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
+app.get('/api/debug/email-config', (req, res) => res.json({ resend_key_present: !!process.env.RESEND_API_KEY, resend_key_length: process.env.RESEND_API_KEY ? process.env.RESEND_API_KEY.length : 0 }));
 
 const PORT = process.env.PORT || 3000;
 if (require.main === module) {
