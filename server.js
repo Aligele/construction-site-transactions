@@ -53,10 +53,42 @@ const INDEX_HTML = `<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Site Transactions</title>
 <style>
-:root{--navy:#1f2d3d;--amber:#d98c2b;--green:#2f7d4f;--red:#b03a3a;--bg:#f5f6f8;--card:#fff;--border:#dde1e6;}
+:root{
+  --sidebar:#16302278;--sidebar-bg:#173B29;--sidebar-active:#2f9e5c;--sidebar-text:#cfe3d6;--sidebar-text-dim:#7fa891;
+  --navy:#1f2d3d;--amber:#d98c2b;--green:#2f7d4f;--red:#b03a3a;--bg:#f5f6f8;--card:#fff;--border:#dde1e6;
+}
 *{box-sizing:border-box;}
 body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;background:var(--bg);color:var(--navy);}
-#app{max-width:960px;margin:0 auto;padding:20px;}
+#app{min-height:100vh;}
+
+/* ---- App shell / sidebar ---- */
+.shell{display:flex;min-height:100vh;}
+.sidebar{
+  position:fixed;top:0;left:0;bottom:0;width:250px;background:linear-gradient(180deg,#173B29,#12301F);
+  color:var(--sidebar-text);z-index:40;transform:translateX(-100%);transition:transform .22s ease;
+  overflow-y:auto;padding-bottom:24px;
+}
+.sidebar.open{transform:translateX(0);}
+.brand{display:flex;align-items:center;gap:12px;padding:20px 18px;border-bottom:1px solid rgba(255,255,255,.08);}
+.brand-logo{width:44px;height:44px;border-radius:50%;background:#eaf7ee;display:flex;align-items:center;justify-content:center;flex-shrink:0;box-shadow:0 0 0 2px rgba(255,255,255,.15);}
+.brand-title{font-weight:700;color:#fff;font-size:15px;line-height:1.2;}
+.brand-sub{font-size:11px;color:var(--sidebar-text-dim);margin-top:2px;}
+.nav-section-label{font-size:11px;letter-spacing:.08em;color:var(--sidebar-text-dim);padding:16px 18px 6px;}
+.nav-item{display:flex;align-items:center;gap:10px;margin:2px 10px;padding:10px 12px;border-radius:8px;color:var(--sidebar-text);text-decoration:none;font-size:14px;cursor:pointer;}
+.nav-item:hover{background:rgba(255,255,255,.06);}
+.nav-item.active{background:var(--sidebar-active);color:#fff;font-weight:600;}
+.nav-icon{font-size:16px;width:18px;text-align:center;}
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:30;display:none;}
+.overlay.open{display:block;}
+.main{flex:1;min-width:0;}
+.topbar-app{display:flex;align-items:center;justify-content:space-between;background:#fff;border-bottom:1px solid var(--border);padding:12px 16px;position:sticky;top:0;z-index:20;}
+.menu-btn{background:transparent;border:none;color:var(--navy);font-size:20px;padding:4px 8px;cursor:pointer;}
+.topbar-right{display:flex;align-items:center;gap:14px;}
+.avatar{width:34px;height:34px;border-radius:50%;background:var(--sidebar-active);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;}
+.bell{font-size:18px;position:relative;}
+.bell .dot{position:absolute;top:-3px;right:-4px;background:var(--red);color:#fff;font-size:9px;border-radius:10px;padding:1px 4px;}
+#content{max-width:900px;margin:0 auto;padding:20px;}
+
 .card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:20px;margin-bottom:16px;}
 h1{font-size:22px;margin:0 0 4px;} h2{font-size:17px;margin:0 0 12px;} .muted{color:#6b7684;font-size:13px;}
 input,select,textarea,button{font-family:inherit;font-size:14px;padding:9px 10px;border-radius:6px;border:1px solid var(--border);}
@@ -81,6 +113,8 @@ th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--border);} th
 const API = '/api';
 let state = { token: localStorage.getItem('cst_token'), user: JSON.parse(localStorage.getItem('cst_user') || 'null') };
 const appEl = document.getElementById('app');
+const TRUCK_SVG = '<svg width="26" height="26" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="2" y="18" width="24" height="14" rx="2" fill="#1f2d3d"/><path d="M26 22h9l7 7v3a2 2 0 0 1-2 2h-1" stroke="#1f2d3d" stroke-width="2.5" fill="none" stroke-linejoin="round"/><circle cx="13" cy="35" r="4" fill="#173B29" stroke="#1f2d3d" stroke-width="1.5"/><circle cx="34" cy="35" r="4" fill="#173B29" stroke="#1f2d3d" stroke-width="1.5"/></svg>';
+function initials(name){ return (name||'?').split(' ').filter(Boolean).slice(0,2).map(w=>w[0].toUpperCase()).join(''); }
 function save(token, user){ state={token,user}; localStorage.setItem('cst_token',token); localStorage.setItem('cst_user', JSON.stringify(user)); }
 function logout(){ localStorage.removeItem('cst_token'); localStorage.removeItem('cst_user'); state={token:null,user:null}; render(); }
 async function api(path, opts={}) {
@@ -92,7 +126,7 @@ function money(n){ return 'KES ' + Number(n).toLocaleString(undefined,{minimumFr
 function badge(s){ return '<span class="badge '+s+'">'+s+'</span>'; }
 function render(){ state.token ? renderDashboard() : renderLogin(); }
 function renderLogin(){
-  appEl.innerHTML = '<div class="card" style="max-width:360px;margin:60px auto;"><h1>Site Transactions</h1><p class="muted">Sign in to continue</p><label>Email</label><input id="email" type="email" placeholder="you@example.com" /><label>Password</label><input id="password" type="password" placeholder="********" /><div style="margin-top:16px;"><button id="loginBtn" style="width:100%;">Log in</button></div><div class="error" id="err"></div></div>';
+  appEl.innerHTML = '<div class="card" style="max-width:360px;margin:60px auto;"><div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;"><div class="brand-logo" style="box-shadow:none;background:#eaf7ee;">'+TRUCK_SVG+'</div><div><h1 style="margin:0;">Site Transactions</h1><p class="muted" style="margin:0;">Construction Portal</p></div></div><p class="muted">Sign in to continue</p><label>Email</label><input id="email" type="email" placeholder="you@example.com" /><label>Password</label><input id="password" type="password" placeholder="********" /><div style="margin-top:16px;"><button id="loginBtn" style="width:100%;">Log in</button></div><div class="error" id="err"></div></div>';
   document.getElementById('loginBtn').onclick = async () => {
     const email = document.getElementById('email').value.trim();
     const password = document.getElementById('password').value;
@@ -102,8 +136,35 @@ function renderLogin(){
 }
 async function renderDashboard(){
   const {user} = state;
-  appEl.innerHTML = '<div class="topbar"><div><h1>Site Transactions</h1><p class="muted">'+user.full_name+' &middot; '+user.role+'</p></div><button class="secondary" id="logoutBtn">Log out</button></div><div id="content"></div>';
-  document.getElementById('logoutBtn').onclick = logout;
+  appEl.innerHTML =
+    '<div class="shell">' +
+      '<div class="overlay" id="overlay"></div>' +
+      '<aside class="sidebar" id="sidebar">' +
+        '<div class="brand"><div class="brand-logo">'+TRUCK_SVG+'</div><div><div class="brand-title">Site Transactions</div><div class="brand-sub">Construction Portal</div></div></div>' +
+        '<div class="nav-section-label">MAIN</div>' +
+        '<a class="nav-item active" id="navDashboard"><span class="nav-icon">&#8962;</span> Dashboard</a>' +
+        '<div class="nav-section-label">ACCOUNT</div>' +
+        '<a class="nav-item" id="navNotifications"><span class="nav-icon">&#128276;</span> Notifications</a>' +
+        '<a class="nav-item" id="navLogout"><span class="nav-icon">&#8618;</span> Log out</a>' +
+      '</aside>' +
+      '<main class="main">' +
+        '<div class="topbar-app">' +
+          '<button class="menu-btn" id="menuBtn">&#9776;</button>' +
+          '<div class="topbar-right"><span class="bell" id="bellIcon">&#128276;<span class="dot" id="bellDot" style="display:none;"></span></span><div class="avatar">'+initials(user.full_name)+'</div><div><div style="font-weight:600;font-size:13px;">'+user.full_name+'</div><div class="muted" style="font-size:11px;text-transform:capitalize;">'+user.role+'</div></div></div>' +
+        '</div>' +
+        '<div id="content"></div>' +
+      '</main>' +
+    '</div>';
+
+  const sidebar = document.getElementById('sidebar');
+  const overlay = document.getElementById('overlay');
+  document.getElementById('menuBtn').onclick = () => { sidebar.classList.toggle('open'); overlay.classList.toggle('open'); };
+  overlay.onclick = () => { sidebar.classList.remove('open'); overlay.classList.remove('open'); };
+  document.getElementById('navLogout').onclick = logout;
+  document.getElementById('navDashboard').onclick = () => { document.getElementById('content').scrollIntoView({behavior:'smooth'}); sidebar.classList.remove('open'); overlay.classList.remove('open'); };
+  document.getElementById('navNotifications').onclick = () => { const n=document.getElementById('notifList'); if(n) n.scrollIntoView({behavior:'smooth',block:'center'}); sidebar.classList.remove('open'); overlay.classList.remove('open'); };
+  document.getElementById('bellIcon').onclick = document.getElementById('navNotifications').onclick;
+
   const content = document.getElementById('content');
   let contentHtml = '<div class="card"><div class="topbar"><h2>Notifications</h2><span class="muted" id="notifCount"></span></div><div id="notifList" class="muted">Loading...</div></div>';
   if (user.role==='clerk' || user.role==='admin') {
@@ -296,6 +357,8 @@ async function loadNotifications(){
     const notes = await api('/notifications');
     const unread = notes.filter(n => !n.read_at).length;
     document.getElementById('notifCount').textContent = unread ? (unread+' new') : '';
+    const dot = document.getElementById('bellDot');
+    if (dot) { dot.style.display = unread ? 'inline-block' : 'none'; dot.textContent = unread; }
     if (!notes.length) { document.getElementById('notifList').textContent = 'No notifications yet.'; return; }
     document.getElementById('notifList').innerHTML = notes.slice(0,8).map(n =>
       '<div style="padding:8px 0;border-bottom:1px solid #eee;'+(n.read_at?'':'font-weight:600;')+'">'+n.message+'<div class="muted" style="font-weight:normal;">'+new Date(n.created_at).toLocaleString()+'</div></div>'
