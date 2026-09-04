@@ -196,6 +196,9 @@ async function renderDashboard(){
     contentHtml += '<div class="card"><h2>Add a clerk or finance login</h2><div class="row"><div><label>Full name</label><input id="new_name" placeholder="Full name" /></div><div><label>Email</label><input id="new_email" type="email" placeholder="person@example.com" /></div><div><label>Role</label><select id="new_role"><option value="clerk">Clerk</option><option value="finance">Finance</option></select></div></div><div style="margin-top:12px;"><button id="createUserBtn">Create login</button></div><div class="error" id="createUserErr"></div><div id="createUserResult"></div></div>';
     contentHtml += '<div class="card"><h2>Team logins</h2><div id="userList" class="muted">Loading...</div></div>';
   }
+  if (user.role==='manager' || user.role==='finance') {
+    contentHtml += '<div class="card"><div class="topbar"><h2>Workers & attendance</h2><input id="attViewDate" type="date" /></div><div id="workerAttendanceView" class="muted">Loading...</div></div>';
+  }
   content.innerHTML = contentHtml;
 
   loadNotifications();
@@ -206,6 +209,12 @@ async function renderDashboard(){
     dateInput.value = new Date().toISOString().slice(0,10);
     dateInput.onchange = loadWorkerAttendance;
     loadWorkerAttendance();
+  }
+  if (document.getElementById('workerAttendanceView')) {
+    const dateInput = document.getElementById('attViewDate');
+    dateInput.value = new Date().toISOString().slice(0,10);
+    dateInput.onchange = loadWorkerAttendanceView;
+    loadWorkerAttendanceView();
   }
 
   if (document.getElementById('enrollWorkerBtn')) {
@@ -484,6 +493,18 @@ async function loadSummary(){
       '<div style="background:#f5f6f8;border-radius:8px;padding:12px;"><div class="muted">'+c.label+' ('+c.count+')</div><div style="font-size:18px;font-weight:700;color:'+c.color+';">'+money(c.amt)+'</div></div>'
     ).join('') + '</div>';
   } catch(e) { el.textContent = 'Could not load summary.'; }
+}
+async function loadWorkerAttendanceView(){
+  const el = document.getElementById('workerAttendanceView');
+  const date = document.getElementById('attViewDate').value;
+  try {
+    const [workers, marked] = await Promise.all([ api('/workers'), api('/attendance?date='+date) ]);
+    if (!workers.length) { el.textContent = 'No workers enrolled yet.'; return; }
+    const markedIds = new Set(marked.map(m => m.worker_id));
+    el.innerHTML = '<p class="muted">'+marked.length+' of '+workers.length+' present on '+date+'</p><table><thead><tr><th>Name</th><th>ID number</th><th>Designation</th><th>Status</th></tr></thead><tbody>' +
+      workers.map(w => '<tr><td>'+w.name+'</td><td>'+w.id_number+'</td><td>'+w.designation+'</td><td>'+(markedIds.has(w.id)?'<span class="badge paid">present</span>':'<span class="badge rejected">absent</span>')+'</td></tr>').join('') +
+      '</tbody></table>';
+  } catch(e) { el.textContent = 'Could not load attendance.'; }
 }
 async function loadWorkerAttendance(){
   const el = document.getElementById('workerAttendance');
