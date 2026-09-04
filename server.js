@@ -188,6 +188,8 @@ async function renderDashboard(){
     '<div id="table"></div><div id="pagination" class="row" style="margin-top:10px;justify-content:flex-end;"></div></div>';
   if (user.role==='clerk' || user.role==='admin') {
     contentHtml += '<div class="card"><h2>Log transactions</h2><p class="muted">Add materials, labor, fuel, etc. as separate line items, then submit them together — the total goes to your manager and finance in one notification.</p><div class="row"><div><label>Site ID</label><input id="site_id" placeholder="site UUID" value="'+(user.site_id||'')+'" /></div></div><div id="itemRows"></div><div style="margin-top:8px;"><button class="secondary" id="addItemBtn" type="button">+ Add item</button></div><div class="topbar" style="margin-top:14px;"><strong>Total: <span id="batchTotal">KES 0.00</span></strong><button id="submitBatch">Submit all</button></div><div class="error" id="submitErr"></div></div>';
+    contentHtml += '<div class="card"><h2>Enroll a worker</h2><div class="row"><div><label>Full name</label><input id="w_name" placeholder="Full name" /></div><div><label>ID number</label><input id="w_id" placeholder="National ID number" /></div></div><div class="row"><div><label>Phone number</label><input id="w_phone" placeholder="07xxxxxxxx" /></div><div><label>Designation</label><input id="w_designation" placeholder="e.g. Mason, Fundi, Laborer" /></div></div><div style="margin-top:12px;"><button id="enrollWorkerBtn">Enroll worker</button></div><div class="error" id="enrollWorkerErr"></div></div>';
+    contentHtml += '<div class="card"><div class="topbar"><h2>Daily attendance</h2><input id="attDate" type="date" /></div><div id="workerAttendance" class="muted">Loading workers...</div><div style="margin-top:12px;"><button id="submitAttendance">Submit today\\'s attendance</button></div><div class="error" id="attendanceErr"></div><div id="attendanceOk" class="muted"></div></div>';
   }
   contentHtml += '<div class="card"><h2>Change password</h2><div class="row"><div><label>Current password</label><input id="curPw" type="password" /></div><div><label>New password</label><input id="newPw" type="password" /></div></div><div style="margin-top:12px;"><button id="changePwBtn">Update password</button></div><div class="error" id="changePwErr"></div><div id="changePwOk" class="muted"></div></div>';
   if (user.role==='manager' || user.role==='admin') {
@@ -199,6 +201,39 @@ async function renderDashboard(){
   loadNotifications();
   loadSummary();
   if (document.getElementById('userList')) loadUsers();
+  if (document.getElementById('workerAttendance')) {
+    const dateInput = document.getElementById('attDate');
+    dateInput.value = new Date().toISOString().slice(0,10);
+    dateInput.onchange = loadWorkerAttendance;
+    loadWorkerAttendance();
+  }
+
+  if (document.getElementById('enrollWorkerBtn')) {
+    document.getElementById('enrollWorkerBtn').onclick = async () => {
+      const name = document.getElementById('w_name').value.trim();
+      const id_number = document.getElementById('w_id').value.trim();
+      const phone_number = document.getElementById('w_phone').value.trim();
+      const designation = document.getElementById('w_designation').value.trim();
+      try {
+        await api('/workers', {method:'POST', body: JSON.stringify({name, id_number, phone_number, designation})});
+        document.getElementById('enrollWorkerErr').textContent = '';
+        document.getElementById('w_name').value=''; document.getElementById('w_id').value=''; document.getElementById('w_phone').value=''; document.getElementById('w_designation').value='';
+        loadWorkerAttendance();
+      } catch(e) { document.getElementById('enrollWorkerErr').textContent = e.message; }
+    };
+  }
+  if (document.getElementById('submitAttendance')) {
+    document.getElementById('submitAttendance').onclick = async () => {
+      const attendance_date = document.getElementById('attDate').value;
+      const worker_ids = Array.from(document.querySelectorAll('[data-worker-check]:checked')).map(cb => cb.dataset.workerCheck);
+      if (worker_ids.length === 0) { document.getElementById('attendanceErr').textContent = 'Select at least one worker.'; return; }
+      try {
+        const result = await api('/attendance', {method:'POST', body: JSON.stringify({attendance_date, worker_ids})});
+        document.getElementById('attendanceErr').textContent = '';
+        document.getElementById('attendanceOk').textContent = 'Attendance recorded for '+result.recorded+' worker(s) on '+result.date+'.';
+      } catch(e) { document.getElementById('attendanceErr').textContent = e.message; document.getElementById('attendanceOk').textContent=''; }
+    };
+  }
 
   document.getElementById('changePwBtn').onclick = async () => {
     const current_password = document.getElementById('curPw').value;
@@ -449,6 +484,25 @@ async function loadSummary(){
       '<div style="background:#f5f6f8;border-radius:8px;padding:12px;"><div class="muted">'+c.label+' ('+c.count+')</div><div style="font-size:18px;font-weight:700;color:'+c.color+';">'+money(c.amt)+'</div></div>'
     ).join('') + '</div>';
   } catch(e) { el.textContent = 'Could not load summary.'; }
+}
+async function loadWorkerAttendance(){
+  const el = document.getElementById('workerAttendance');
+  const date = document.getElementById('attDate').value;
+  try {
+    const [workers, marked] = await Promise.all([ api('/workers'), api('/attendance?date='+date) ]);
+    if (!workers.length) { el.textContent = 'No workers enrolled yet — add one above.'; return; }
+    const markedIds = new Set(marked.map(m => m.worker_id));
+    el.innerHTML = '<table><thead><tr><th></th><th>Name</th><th>ID number</th><th>Designation</th><th></th></tr></thead><tbody>' +
+      workers.map(w => '<tr><td><input type="checkbox" data-worker-check="'+w.id+'" '+(markedIds.has(w.id)?'checked':'')+' /></td><td>'+w.name+'</td><td>'+w.id_number+'</td><td>'+w.designation+'</td><td><button class="danger" style="padding:4px 8px;font-size:12px;" data-remove-worker="'+w.id+'">remove</button></td></tr>').join('') +
+      '</tbody></table>';
+    el.querySelectorAll('[data-remove-worker]').forEach(btn => {
+      btn.onclick = async () => {
+        if (!confirm('Remove this worker from the registry?')) return;
+        try { await api('/workers/'+btn.dataset.removeWorker, {method:'DELETE'}); loadWorkerAttendance(); }
+        catch(e){ alert(e.message); }
+      };
+    });
+  } catch(e) { el.textContent = 'Could not load workers.'; }
 }
 async function loadUsers(){
   const el = document.getElementById('userList');
@@ -1067,6 +1121,59 @@ app.delete('/api/transaction-vendors/:linkId', requireAuth, requireRole('manager
   const { error } = await supabase.from('cst_transaction_vendors').delete().eq('id', req.params.linkId);
   if (error) return res.status(500).json({ error: error.message });
   res.json({ ok: true });
+});
+
+// ---------- Worker registry & daily attendance ----------
+app.post('/api/workers', requireAuth, requireRole('clerk', 'admin'), async (req, res) => {
+  const { name, id_number, phone_number, designation } = req.body;
+  if (!name || !id_number || !designation) return res.status(400).json({ error: 'name, id_number and designation are required' });
+  const site_id = req.user.site_id;
+  if (!site_id) return res.status(400).json({ error: 'Your account has no site associated with it' });
+
+  const { data, error } = await supabase.from('cst_workers').insert({
+    site_id, name, id_number, phone_number: phone_number || null, designation, enrolled_by: req.user.id
+  }).select().single();
+  if (error) {
+    if (error.message.includes('duplicate')) return res.status(409).json({ error: 'A worker with this ID number is already enrolled at this site' });
+    return res.status(500).json({ error: error.message });
+  }
+  res.status(201).json(data);
+});
+
+app.get('/api/workers', requireAuth, async (req, res) => {
+  let query = supabase.from('cst_workers').select('*').order('name');
+  if (req.user.role !== 'admin') query = query.eq('site_id', req.user.site_id);
+  const { data, error } = await query;
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+app.delete('/api/workers/:id', requireAuth, requireRole('clerk', 'manager', 'admin'), async (req, res) => {
+  const { error } = await supabase.from('cst_workers').delete().eq('id', req.params.id);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
+});
+
+app.post('/api/attendance', requireAuth, requireRole('clerk', 'admin'), async (req, res) => {
+  const { attendance_date, worker_ids } = req.body;
+  if (!Array.isArray(worker_ids) || worker_ids.length === 0) return res.status(400).json({ error: 'worker_ids (non-empty array) is required' });
+  const site_id = req.user.site_id;
+  if (!site_id) return res.status(400).json({ error: 'Your account has no site associated with it' });
+  const date = attendance_date || new Date().toISOString().slice(0, 10);
+
+  const rows = worker_ids.map(worker_id => ({ worker_id, site_id, attendance_date: date, submitted_by: req.user.id }));
+  const { data, error } = await supabase.from('cst_attendance').upsert(rows, { onConflict: 'worker_id,attendance_date', ignoreDuplicates: true }).select();
+  if (error) return res.status(500).json({ error: error.message });
+  res.status(201).json({ ok: true, recorded: data.length, date });
+});
+
+app.get('/api/attendance', requireAuth, async (req, res) => {
+  const date = req.query.date || new Date().toISOString().slice(0, 10);
+  let query = supabase.from('cst_attendance').select('worker_id, attendance_date').eq('attendance_date', date);
+  if (req.user.role !== 'admin') query = query.eq('site_id', req.user.site_id);
+  const { data, error } = await query;
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
 });
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
