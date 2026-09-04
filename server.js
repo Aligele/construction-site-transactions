@@ -47,6 +47,7 @@ async function sendB2CPayment({ phone, amount, remarks, occasion, callbackHost }
   const token = await getMpesaToken();
   const shortcode = process.env.MPESA_SHORTCODE || '600000';
   const body = {
+    OriginatorConversationID: crypto.randomUUID(),
     InitiatorName: process.env.MPESA_INITIATOR_NAME || 'testapi',
     SecurityCredential: process.env.MPESA_SECURITY_CREDENTIAL,
     CommandID: 'BusinessPayment',
@@ -1403,7 +1404,7 @@ async function computeWeeklyWages(req) {
   const { data: attendance, error: aErr } = await attQuery;
   if (aErr) throw aErr;
 
-  const { data: payments, error: pErr } = await supabase.from('cst_wage_payments').select('worker_id, paid_at').eq('week_start', start);
+  const { data: payments, error: pErr } = await supabase.from('cst_wage_payments').select('worker_id, paid_at, disbursement_status').eq('week_start', start).neq('disbursement_status', 'failed');
   if (pErr) throw pErr;
   const paidMap = {};
   for (const p of payments) paidMap[p.worker_id] = p.paid_at;
@@ -1489,11 +1490,11 @@ app.post('/api/wages/weekly/pay-all', requireAuth, requireRole('finance', 'admin
         }
       }
 
-      const { error: insErr } = await supabase.from('cst_wage_payments').insert({
+      const { error: insErr } = await supabase.from('cst_wage_payments').upsert({
         site_id, worker_id: r.worker_id, week_start: start, week_end: end,
         days_present: r.days_present, daily_rate: r.daily_rate, total_amount: r.total_pay, paid_by: req.user.id,
-        disbursement_status, mpesa_conversation_id, mpesa_result_desc
-      });
+        disbursement_status, mpesa_conversation_id, mpesa_result_desc, paid_at: new Date().toISOString()
+      }, { onConflict: 'worker_id,week_start' });
       if (insErr) { results.push({ name: r.name, ok: false, error: insErr.message }); continue; }
       results.push({ name: r.name, ok: true, disbursement_status, mpesa_result_desc });
     }
