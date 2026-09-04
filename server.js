@@ -155,6 +155,7 @@ async function renderDashboard(){
         '<div class="nav-section-label">MAIN</div>' +
         '<a class="nav-item active" id="navDashboard"><span class="nav-icon">&#8962;</span> Dashboard</a>' +
         '<a class="nav-item" id="navTransactions"><span class="nav-icon">&#128203;</span> Transactions</a>' +
+        (['clerk','finance','manager','admin'].includes(user.role) ? '<a class="nav-item" id="navRegistry"><span class="nav-icon">&#128101;</span> Registry</a>' : '') +
         '<div class="nav-section-label">ACCOUNT</div>' +
         '<a class="nav-item" id="navNotifications"><span class="nav-icon">&#128276;</span> Notifications</a>' +
         '<a class="nav-item" id="navLogout"><span class="nav-icon">&#8618;</span> Log out</a>' +
@@ -177,6 +178,14 @@ async function renderDashboard(){
   function closeSidebar(){ sidebar.classList.remove('open'); overlay.classList.remove('open'); }
   document.getElementById('navDashboard').onclick = function(){ setActiveNav(this); document.getElementById('content').scrollIntoView({behavior:'smooth'}); closeSidebar(); };
   document.getElementById('navTransactions').onclick = function(){ setActiveNav(this); const t=document.getElementById('table'); if(t) t.scrollIntoView({behavior:'smooth',block:'start'}); closeSidebar(); };
+  if (document.getElementById('navRegistry')) {
+    document.getElementById('navRegistry').onclick = function(){
+      setActiveNav(this);
+      const target = document.getElementById('workerAttendance') || document.getElementById('workerAttendanceView') || document.getElementById('weeklyWages');
+      if (target) target.scrollIntoView({behavior:'smooth',block:'start'});
+      closeSidebar();
+    };
+  }
   document.getElementById('navNotifications').onclick = function(){ setActiveNav(this); const n=document.getElementById('notifList'); if(n) n.scrollIntoView({behavior:'smooth',block:'center'}); closeSidebar(); };
   document.getElementById('bellIcon').onclick = document.getElementById('navNotifications').onclick;
 
