@@ -14,6 +14,59 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SER
   auth: { autoRefreshToken: false, persistSession: false }
 });
 
+// ---------- M-Pesa Daraja B2C integration ----------
+const MPESA_ENV = process.env.MPESA_ENV || 'sandbox';
+const MPESA_BASE_URL = MPESA_ENV === 'production' ? 'https://api.safaricom.co.ke' : 'https://sandbox.safaricom.co.ke';
+let mpesaTokenCache = { token: null, expiresAt: 0 };
+
+function mpesaConfigured() {
+  return !!(process.env.MPESA_CONSUMER_KEY && process.env.MPESA_CONSUMER_SECRET && process.env.MPESA_SECURITY_CREDENTIAL);
+}
+
+async function getMpesaToken() {
+  if (mpesaTokenCache.token && Date.now() < mpesaTokenCache.expiresAt) return mpesaTokenCache.token;
+  const auth = Buffer.from(`${process.env.MPESA_CONSUMER_KEY}:${process.env.MPESA_CONSUMER_SECRET}`).toString('base64');
+  const r = await fetch(`${MPESA_BASE_URL}/oauth/v1/generate?grant_type=client_credentials`, {
+    headers: { Authorization: `Basic ${auth}` }
+  });
+  const data = await r.json();
+  if (!r.ok || !data.access_token) throw new Error('Failed to get M-Pesa token: ' + JSON.stringify(data));
+  mpesaTokenCache = { token: data.access_token, expiresAt: Date.now() + 55 * 60 * 1000 };
+  return data.access_token;
+}
+
+function normalizePhone(phone) {
+  let p = (phone || '').replace(/\s|-/g, '');
+  if (p.startsWith('+')) p = p.slice(1);
+  if (p.startsWith('0')) p = '254' + p.slice(1);
+  if (p.startsWith('7') || p.startsWith('1')) p = '254' + p;
+  return p;
+}
+
+async function sendB2CPayment({ phone, amount, remarks, occasion, callbackHost }) {
+  const token = await getMpesaToken();
+  const shortcode = process.env.MPESA_SHORTCODE || '600000';
+  const body = {
+    InitiatorName: process.env.MPESA_INITIATOR_NAME || 'testapi',
+    SecurityCredential: process.env.MPESA_SECURITY_CREDENTIAL,
+    CommandID: 'BusinessPayment',
+    Amount: Math.round(Number(amount)),
+    PartyA: shortcode,
+    PartyB: normalizePhone(phone),
+    Remarks: (remarks || 'Wage payment').slice(0, 100),
+    QueueTimeOutURL: `https://${callbackHost}/api/mpesa/b2c/timeout`,
+    ResultURL: `https://${callbackHost}/api/mpesa/b2c/result`,
+    Occasion: (occasion || '').slice(0, 100)
+  };
+  const r = await fetch(`${MPESA_BASE_URL}/mpesa/b2c/v3/paymentrequest`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  const data = await r.json();
+  return { ok: r.ok && data.ResponseCode === '0', status: r.status, data };
+}
+
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -312,9 +365,21 @@ async function renderDashboard(){
         try {
           const result = await api('/wages/weekly/pay-all', {method:'POST', body: JSON.stringify({start})});
           document.getElementById('payWagesErr').textContent = '';
-          document.getElementById('payWagesOk').textContent = result.paid_count > 0
-            ? 'Paid '+result.paid_count+' worker(s), total '+money(result.total_amount)+'.'
-            : (result.message || 'Nothing to pay.');
+          if (result.paid_count > 0) {
+            let msg = 'Recorded payment for '+result.paid_count+' worker(s), total '+money(result.total_amount)+'.';
+            if (result.mpesa_enabled) {
+              const sent = (result.results||[]).filter(r=>r.disbursement_status==='sent').length;
+              const failed = (result.results||[]).filter(r=>r.disbursement_status==='failed').length;
+              msg += ' M-Pesa: '+sent+' sent, '+failed+' failed.';
+              const failedNames = (result.results||[]).filter(r=>r.disbursement_status==='failed').map(r=>r.name+' ('+(r.mpesa_result_desc||'error')+')');
+              if (failedNames.length) msg += ' Failed: '+failedNames.join('; ');
+            } else {
+              msg += ' (M-Pesa not configured — recorded as paid manually.)';
+            }
+            document.getElementById('payWagesOk').textContent = msg;
+          } else {
+            document.getElementById('payWagesOk').textContent = result.message || 'Nothing to pay.';
+          }
           loadWeeklyWages(); loadSummary(); loadTable();
         } catch(e) { document.getElementById('payWagesErr').textContent = e.message; document.getElementById('payWagesOk').textContent=''; }
       };
@@ -1349,7 +1414,7 @@ async function computeWeeklyWages(req) {
   const rows = workers.map(w => {
     const daysPresent = daysByWorker[w.id] || 0;
     return {
-      worker_id: w.id, name: w.name, id_number: w.id_number, designation: w.designation,
+      worker_id: w.id, name: w.name, id_number: w.id_number, designation: w.designation, phone_number: w.phone_number,
       daily_rate: Number(w.daily_rate) || 0, days_present: daysPresent, total_pay: daysPresent * (Number(w.daily_rate) || 0),
       paid: !!paidMap[w.id], paid_at: paidMap[w.id] || null
     };
@@ -1400,12 +1465,38 @@ app.post('/api/wages/weekly/pay-all', requireAuth, requireRole('finance', 'admin
     const toPay = rows.filter(r => !r.paid && r.total_pay > 0);
     if (toPay.length === 0) return res.json({ ok: true, paid_count: 0, message: 'Nothing to pay — all workers already settled or no attendance this week.' });
 
-    const paymentRows = toPay.map(r => ({
-      site_id, worker_id: r.worker_id, week_start: start, week_end: end,
-      days_present: r.days_present, daily_rate: r.daily_rate, total_amount: r.total_pay, paid_by: req.user.id
-    }));
-    const { error: payErr } = await supabase.from('cst_wage_payments').insert(paymentRows);
-    if (payErr) return res.status(500).json({ error: payErr.message });
+    const mpesaOn = mpesaConfigured();
+    const callbackHost = req.get('host');
+    const results = [];
+
+    for (const r of toPay) {
+      let disbursement_status = 'not_attempted';
+      let mpesa_conversation_id = null;
+      let mpesa_result_desc = null;
+
+      if (mpesaOn && r.phone_number) {
+        try {
+          const b2c = await sendB2CPayment({
+            phone: r.phone_number, amount: r.total_pay,
+            remarks: `Wages ${start} to ${end}`, occasion: r.name, callbackHost
+          });
+          disbursement_status = b2c.ok ? 'sent' : 'failed';
+          mpesa_conversation_id = b2c.data.ConversationID || null;
+          mpesa_result_desc = b2c.data.ResponseDescription || b2c.data.errorMessage || JSON.stringify(b2c.data);
+        } catch (e) {
+          disbursement_status = 'failed';
+          mpesa_result_desc = e.message;
+        }
+      }
+
+      const { error: insErr } = await supabase.from('cst_wage_payments').insert({
+        site_id, worker_id: r.worker_id, week_start: start, week_end: end,
+        days_present: r.days_present, daily_rate: r.daily_rate, total_amount: r.total_pay, paid_by: req.user.id,
+        disbursement_status, mpesa_conversation_id, mpesa_result_desc
+      });
+      if (insErr) { results.push({ name: r.name, ok: false, error: insErr.message }); continue; }
+      results.push({ name: r.name, ok: true, disbursement_status, mpesa_result_desc });
+    }
 
     // Log a single reconciliation transaction covering the whole payroll run, already marked paid.
     const grandTotal = toPay.reduce((s, r) => s + r.total_pay, 0);
@@ -1417,8 +1508,36 @@ app.post('/api/wages/weekly/pay-all', requireAuth, requireRole('finance', 'admin
       manager_approved: true, finance_approved: true
     });
 
-    res.json({ ok: true, paid_count: toPay.length, total_amount: grandTotal });
+    res.json({ ok: true, paid_count: toPay.length, total_amount: grandTotal, mpesa_enabled: mpesaOn, results });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ---------- M-Pesa B2C callbacks ----------
+app.post('/api/mpesa/b2c/result', express.json(), async (req, res) => {
+  try {
+    const result = req.body.Result || {};
+    const conversationId = result.ConversationID;
+    const resultCode = result.ResultCode;
+    const resultDesc = result.ResultDesc;
+    let receipt = null;
+    const params = result.ResultParameters && result.ResultParameters.ResultParameter;
+    if (Array.isArray(params)) {
+      const txnParam = params.find(p => p.Key === 'TransactionReceipt' || p.Key === 'TransactionID');
+      if (txnParam) receipt = txnParam.Value;
+    }
+    if (conversationId) {
+      await supabase.from('cst_wage_payments').update({
+        disbursement_status: resultCode === 0 || resultCode === '0' ? 'confirmed' : 'failed',
+        mpesa_receipt: receipt, mpesa_result_desc: resultDesc
+      }).eq('mpesa_conversation_id', conversationId);
+    }
+  } catch (e) { console.error('M-Pesa result callback error:', e.message); }
+  res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
+});
+
+app.post('/api/mpesa/b2c/timeout', express.json(), (req, res) => {
+  console.error('M-Pesa B2C request timed out:', JSON.stringify(req.body));
+  res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
 });
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
