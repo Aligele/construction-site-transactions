@@ -188,7 +188,7 @@ async function renderDashboard(){
     '<div id="table"></div><div id="pagination" class="row" style="margin-top:10px;justify-content:flex-end;"></div></div>';
   if (user.role==='clerk' || user.role==='admin') {
     contentHtml += '<div class="card"><h2>Log transactions</h2><p class="muted">Add materials, labor, fuel, etc. as separate line items, then submit them together — the total goes to your manager and finance in one notification.</p><div class="row"><div><label>Site ID</label><input id="site_id" placeholder="site UUID" value="'+(user.site_id||'')+'" /></div></div><div id="itemRows"></div><div style="margin-top:8px;"><button class="secondary" id="addItemBtn" type="button">+ Add item</button></div><div class="topbar" style="margin-top:14px;"><strong>Total: <span id="batchTotal">KES 0.00</span></strong><button id="submitBatch">Submit all</button></div><div class="error" id="submitErr"></div></div>';
-    contentHtml += '<div class="card"><h2>Enroll a worker</h2><div class="row"><div><label>Full name</label><input id="w_name" placeholder="Full name" /></div><div><label>ID number</label><input id="w_id" placeholder="National ID number" /></div></div><div class="row"><div><label>Phone number</label><input id="w_phone" placeholder="07xxxxxxxx" /></div><div><label>Designation</label><input id="w_designation" placeholder="e.g. Mason, Fundi, Laborer" /></div></div><div style="margin-top:12px;"><button id="enrollWorkerBtn">Enroll worker</button></div><div class="error" id="enrollWorkerErr"></div></div>';
+    contentHtml += '<div class="card"><h2>Enroll a worker</h2><div class="row"><div><label>Full name</label><input id="w_name" placeholder="Full name" /></div><div><label>ID number</label><input id="w_id" placeholder="National ID number" /></div></div><div class="row"><div><label>Phone number</label><input id="w_phone" placeholder="07xxxxxxxx" /></div><div><label>Designation</label><input id="w_designation" placeholder="e.g. Mason, Fundi, Laborer" /></div><div><label>Daily rate (KES)</label><input id="w_rate" type="number" step="0.01" placeholder="e.g. 800" /></div></div><div style="margin-top:12px;"><button id="enrollWorkerBtn">Enroll worker</button></div><div class="error" id="enrollWorkerErr"></div></div>';
     contentHtml += '<div class="card"><div class="topbar"><h2>Daily attendance</h2><input id="attDate" type="date" /></div><div id="workerAttendance" class="muted">Loading workers...</div><div style="margin-top:12px;"><button id="submitAttendance">Submit today\\'s attendance</button></div><div class="error" id="attendanceErr"></div><div id="attendanceOk" class="muted"></div></div>';
   }
   contentHtml += '<div class="card"><h2>Change password</h2><div class="row"><div><label>Current password</label><input id="curPw" type="password" /></div><div><label>New password</label><input id="newPw" type="password" /></div></div><div style="margin-top:12px;"><button id="changePwBtn">Update password</button></div><div class="error" id="changePwErr"></div><div id="changePwOk" class="muted"></div></div>';
@@ -198,6 +198,9 @@ async function renderDashboard(){
   }
   if (user.role==='manager' || user.role==='finance') {
     contentHtml += '<div class="card"><div class="topbar"><h2>Workers & attendance</h2><input id="attViewDate" type="date" /></div><div id="workerAttendanceView" class="muted">Loading...</div></div>';
+  }
+  if (user.role==='finance' || user.role==='manager' || user.role==='admin') {
+    contentHtml += '<div class="card"><div class="topbar"><h2>Weekly wages</h2><div><label style="display:inline;margin-right:6px;">Week starting</label><input id="wagesWeekStart" type="date" /></div></div><div id="weeklyWages" class="muted">Loading...</div><div style="margin-top:10px;"><button class="secondary" id="downloadWagesBtn">Download Excel</button></div></div>';
   }
   content.innerHTML = contentHtml;
 
@@ -216,6 +219,25 @@ async function renderDashboard(){
     dateInput.onchange = loadWorkerAttendanceView;
     loadWorkerAttendanceView();
   }
+  if (document.getElementById('weeklyWages')) {
+    const wsInput = document.getElementById('wagesWeekStart');
+    const today = new Date();
+    const day = today.getDay();
+    const diffToMonday = day === 0 ? 6 : day - 1;
+    const monday = new Date(today);
+    monday.setDate(today.getDate() - diffToMonday);
+    wsInput.value = monday.toISOString().slice(0,10);
+    wsInput.onchange = loadWeeklyWages;
+    loadWeeklyWages();
+    document.getElementById('downloadWagesBtn').onclick = () => {
+      const start = document.getElementById('wagesWeekStart').value;
+      fetch(API+'/wages/weekly/export?start='+start, {headers:{Authorization:'Bearer '+state.token}})
+        .then(r=>r.blob()).then(blob=>{
+          const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href=url;
+          a.download = 'weekly-wages-'+start+'.xlsx'; a.click();
+        });
+    };
+  }
 
   if (document.getElementById('enrollWorkerBtn')) {
     document.getElementById('enrollWorkerBtn').onclick = async () => {
@@ -223,10 +245,11 @@ async function renderDashboard(){
       const id_number = document.getElementById('w_id').value.trim();
       const phone_number = document.getElementById('w_phone').value.trim();
       const designation = document.getElementById('w_designation').value.trim();
+      const daily_rate = document.getElementById('w_rate').value;
       try {
-        await api('/workers', {method:'POST', body: JSON.stringify({name, id_number, phone_number, designation})});
+        await api('/workers', {method:'POST', body: JSON.stringify({name, id_number, phone_number, designation, daily_rate})});
         document.getElementById('enrollWorkerErr').textContent = '';
-        document.getElementById('w_name').value=''; document.getElementById('w_id').value=''; document.getElementById('w_phone').value=''; document.getElementById('w_designation').value='';
+        document.getElementById('w_name').value=''; document.getElementById('w_id').value=''; document.getElementById('w_phone').value=''; document.getElementById('w_designation').value=''; document.getElementById('w_rate').value='';
         loadWorkerAttendance();
       } catch(e) { document.getElementById('enrollWorkerErr').textContent = e.message; }
     };
@@ -493,6 +516,18 @@ async function loadSummary(){
       '<div style="background:#f5f6f8;border-radius:8px;padding:12px;"><div class="muted">'+c.label+' ('+c.count+')</div><div style="font-size:18px;font-weight:700;color:'+c.color+';">'+money(c.amt)+'</div></div>'
     ).join('') + '</div>';
   } catch(e) { el.textContent = 'Could not load summary.'; }
+}
+async function loadWeeklyWages(){
+  const el = document.getElementById('weeklyWages');
+  const start = document.getElementById('wagesWeekStart').value;
+  try {
+    const { start: s, end, rows } = await api('/wages/weekly?start='+start);
+    if (!rows.length) { el.textContent = 'No workers enrolled yet.'; return; }
+    const grandTotal = rows.reduce((sum, r) => sum + r.total_pay, 0);
+    el.innerHTML = '<p class="muted">Week: '+s+' to '+end+'</p><table><thead><tr><th>Name</th><th>Designation</th><th>Daily Rate</th><th>Days Present</th><th>Total Pay</th></tr></thead><tbody>' +
+      rows.map(r => '<tr><td>'+r.name+'</td><td>'+r.designation+'</td><td>'+money(r.daily_rate)+'</td><td>'+r.days_present+'</td><td><strong>'+money(r.total_pay)+'</strong></td></tr>').join('') +
+      '</tbody></table><p style="text-align:right;margin-top:8px;"><strong>Grand total: '+money(grandTotal)+'</strong></p>';
+  } catch(e) { el.textContent = 'Could not load wages.'; }
 }
 async function loadWorkerAttendanceView(){
   const el = document.getElementById('workerAttendanceView');
@@ -1146,13 +1181,13 @@ app.delete('/api/transaction-vendors/:linkId', requireAuth, requireRole('manager
 
 // ---------- Worker registry & daily attendance ----------
 app.post('/api/workers', requireAuth, requireRole('clerk', 'admin'), async (req, res) => {
-  const { name, id_number, phone_number, designation } = req.body;
+  const { name, id_number, phone_number, designation, daily_rate } = req.body;
   if (!name || !id_number || !designation) return res.status(400).json({ error: 'name, id_number and designation are required' });
   const site_id = req.user.site_id;
   if (!site_id) return res.status(400).json({ error: 'Your account has no site associated with it' });
 
   const { data, error } = await supabase.from('cst_workers').insert({
-    site_id, name, id_number, phone_number: phone_number || null, designation, enrolled_by: req.user.id
+    site_id, name, id_number, phone_number: phone_number || null, designation, daily_rate: daily_rate || 0, enrolled_by: req.user.id
   }).select().single();
   if (error) {
     if (error.message.includes('duplicate')) return res.status(409).json({ error: 'A worker with this ID number is already enrolled at this site' });
@@ -1195,6 +1230,74 @@ app.get('/api/attendance', requireAuth, async (req, res) => {
   const { data, error } = await query;
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
+});
+
+// ---------- Weekly wages (attendance days x daily rate) ----------
+async function computeWeeklyWages(req) {
+  const start = req.query.start || (() => {
+    const d = new Date();
+    const day = d.getDay(); // 0=Sun
+    const diffToMonday = day === 0 ? 6 : day - 1;
+    d.setDate(d.getDate() - diffToMonday);
+    return d.toISOString().slice(0, 10);
+  })();
+  const end = new Date(start);
+  end.setDate(end.getDate() + 6);
+  const endStr = end.toISOString().slice(0, 10);
+
+  let workerQuery = supabase.from('cst_workers').select('*').order('name');
+  if (req.user.role !== 'admin') workerQuery = workerQuery.eq('site_id', req.user.site_id);
+  const { data: workers, error: wErr } = await workerQuery;
+  if (wErr) throw wErr;
+
+  let attQuery = supabase.from('cst_attendance').select('worker_id, attendance_date').gte('attendance_date', start).lte('attendance_date', endStr);
+  if (req.user.role !== 'admin') attQuery = attQuery.eq('site_id', req.user.site_id);
+  const { data: attendance, error: aErr } = await attQuery;
+  if (aErr) throw aErr;
+
+  const daysByWorker = {};
+  for (const a of attendance) daysByWorker[a.worker_id] = (daysByWorker[a.worker_id] || 0) + 1;
+
+  const rows = workers.map(w => {
+    const daysPresent = daysByWorker[w.id] || 0;
+    return { name: w.name, id_number: w.id_number, designation: w.designation, daily_rate: Number(w.daily_rate) || 0, days_present: daysPresent, total_pay: daysPresent * (Number(w.daily_rate) || 0) };
+  });
+  return { start, end: endStr, rows };
+}
+
+app.get('/api/wages/weekly', requireAuth, requireRole('finance', 'manager', 'admin'), async (req, res) => {
+  try { res.json(await computeWeeklyWages(req)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/wages/weekly/export', requireAuth, requireRole('finance', 'manager', 'admin'), async (req, res) => {
+  try {
+    const { start, end, rows } = await computeWeeklyWages(req);
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'Construction Site Transactions';
+    workbook.created = new Date();
+    const sheet = workbook.addWorksheet('Weekly Wages');
+    sheet.columns = [
+      { header: 'Name', key: 'name', width: 24 },
+      { header: 'ID Number', key: 'id_number', width: 16 },
+      { header: 'Designation', key: 'designation', width: 18 },
+      { header: 'Daily Rate', key: 'daily_rate', width: 14 },
+      { header: 'Days Present', key: 'days_present', width: 14 },
+      { header: 'Total Pay', key: 'total_pay', width: 16 }
+    ];
+    sheet.getRow(1).font = { bold: true };
+    sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDDEBF7' } };
+    sheet.addRows(rows);
+    const grandTotal = rows.reduce((s, r) => s + r.total_pay, 0);
+    sheet.addRow({});
+    const totalRow = sheet.addRow({ name: 'TOTAL', total_pay: grandTotal });
+    totalRow.font = { bold: true };
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="weekly-wages-${start}-to-${end}.xlsx"`);
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
