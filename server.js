@@ -268,7 +268,7 @@ async function renderDashboard(){
     contentHtml += '<div class="card"><div class="topbar"><h2>Workers & attendance</h2><input id="attViewDate" type="date" /></div><div id="workerAttendanceView" class="muted">Loading...</div></div>';
   }
   if (user.role==='finance' || user.role==='manager' || user.role==='admin') {
-    contentHtml += '<div class="card"><div class="topbar"><h2>Weekly wages</h2><div><label style="display:inline;margin-right:6px;">Week starting</label><input id="wagesWeekStart" type="date" /></div></div><div id="weeklyWages" class="muted">Loading...</div><div style="margin-top:10px;text-align:left;"><button class="success" id="downloadWagesBtn">Download Excel</button></div></div>';
+    contentHtml += '<div class="card"><div class="topbar"><h2>Weekly wages</h2><div><label style="display:inline;margin-right:6px;">Week starting</label><input id="wagesWeekStart" type="date" /></div></div><div id="weeklyWages" class="muted">Loading...</div><div style="margin-top:10px;text-align:left;">'+(['finance','admin'].includes(user.role)?'<button class="success" id="payAllWagesBtn">Pay all wages</button> ':'')+'<button class="success" id="downloadWagesBtn">Download Excel</button></div><div class="error" id="payWagesErr"></div><div class="muted" id="payWagesOk"></div></div>';
   }
   content.innerHTML = contentHtml;
 
@@ -305,6 +305,20 @@ async function renderDashboard(){
           a.download = 'weekly-wages-'+start+'.xlsx'; a.click();
         });
     };
+    if (document.getElementById('payAllWagesBtn')) {
+      document.getElementById('payAllWagesBtn').onclick = async () => {
+        const start = document.getElementById('wagesWeekStart').value;
+        if (!confirm('Pay all outstanding wages for the week starting '+start+'? This settles every worker who hasn\\'t been paid yet for that week.')) return;
+        try {
+          const result = await api('/wages/weekly/pay-all', {method:'POST', body: JSON.stringify({start})});
+          document.getElementById('payWagesErr').textContent = '';
+          document.getElementById('payWagesOk').textContent = result.paid_count > 0
+            ? 'Paid '+result.paid_count+' worker(s), total '+money(result.total_amount)+'.'
+            : (result.message || 'Nothing to pay.');
+          loadWeeklyWages(); loadSummary(); loadTable();
+        } catch(e) { document.getElementById('payWagesErr').textContent = e.message; document.getElementById('payWagesOk').textContent=''; }
+      };
+    }
   }
 
   if (document.getElementById('enrollWorkerBtn')) {
@@ -592,9 +606,10 @@ async function loadWeeklyWages(){
     const { start: s, end, rows } = await api('/wages/weekly?start='+start);
     if (!rows.length) { el.textContent = 'No workers enrolled yet.'; return; }
     const grandTotal = rows.reduce((sum, r) => sum + r.total_pay, 0);
-    el.innerHTML = '<p class="muted">Week: '+s+' to '+end+'</p><table><thead><tr><th>Name</th><th>Designation</th><th>Daily Rate</th><th>Days Present</th><th>Total Pay</th></tr></thead><tbody>' +
-      rows.map(r => '<tr><td>'+r.name+'</td><td>'+r.designation+'</td><td>'+money(r.daily_rate)+'</td><td>'+r.days_present+'</td><td><strong>'+money(r.total_pay)+'</strong></td></tr>').join('') +
-      '</tbody></table><p style="text-align:right;margin-top:8px;"><strong>Grand total: '+money(grandTotal)+'</strong></p>';
+    const outstanding = rows.filter(r => !r.paid).reduce((sum, r) => sum + r.total_pay, 0);
+    el.innerHTML = '<p class="muted">Week: '+s+' to '+end+'</p><table><thead><tr><th>Name</th><th>Designation</th><th>Daily Rate</th><th>Days Present</th><th>Total Pay</th><th>Status</th></tr></thead><tbody>' +
+      rows.map(r => '<tr><td>'+r.name+'</td><td>'+r.designation+'</td><td>'+money(r.daily_rate)+'</td><td>'+r.days_present+'</td><td><strong>'+money(r.total_pay)+'</strong></td><td>'+(r.paid?'<span class="badge paid">paid</span>':(r.total_pay>0?'<span class="badge pending">outstanding</span>':'<span class="muted">—</span>'))+'</td></tr>').join('') +
+      '</tbody></table><p style="text-align:right;margin-top:8px;"><strong>Grand total: '+money(grandTotal)+'</strong><br/><span class="muted">Outstanding: '+money(outstanding)+'</span></p>';
   } catch(e) { el.textContent = 'Could not load wages.'; }
 }
 async function loadWorkerAttendanceView(){
@@ -1323,12 +1338,21 @@ async function computeWeeklyWages(req) {
   const { data: attendance, error: aErr } = await attQuery;
   if (aErr) throw aErr;
 
+  const { data: payments, error: pErr } = await supabase.from('cst_wage_payments').select('worker_id, paid_at').eq('week_start', start);
+  if (pErr) throw pErr;
+  const paidMap = {};
+  for (const p of payments) paidMap[p.worker_id] = p.paid_at;
+
   const daysByWorker = {};
   for (const a of attendance) daysByWorker[a.worker_id] = (daysByWorker[a.worker_id] || 0) + 1;
 
   const rows = workers.map(w => {
     const daysPresent = daysByWorker[w.id] || 0;
-    return { name: w.name, id_number: w.id_number, designation: w.designation, daily_rate: Number(w.daily_rate) || 0, days_present: daysPresent, total_pay: daysPresent * (Number(w.daily_rate) || 0) };
+    return {
+      worker_id: w.id, name: w.name, id_number: w.id_number, designation: w.designation,
+      daily_rate: Number(w.daily_rate) || 0, days_present: daysPresent, total_pay: daysPresent * (Number(w.daily_rate) || 0),
+      paid: !!paidMap[w.id], paid_at: paidMap[w.id] || null
+    };
   });
   return { start, end: endStr, rows };
 }
@@ -1351,11 +1375,12 @@ app.get('/api/wages/weekly/export', requireAuth, requireRole('finance', 'manager
       { header: 'Designation', key: 'designation', width: 18 },
       { header: 'Daily Rate', key: 'daily_rate', width: 14 },
       { header: 'Days Present', key: 'days_present', width: 14 },
-      { header: 'Total Pay', key: 'total_pay', width: 16 }
+      { header: 'Total Pay', key: 'total_pay', width: 16 },
+      { header: 'Paid', key: 'paid_label', width: 10 }
     ];
     sheet.getRow(1).font = { bold: true };
     sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDDEBF7' } };
-    sheet.addRows(rows);
+    sheet.addRows(rows.map(r => ({ ...r, paid_label: r.paid ? 'Yes' : 'No' })));
     const grandTotal = rows.reduce((s, r) => s + r.total_pay, 0);
     sheet.addRow({});
     const totalRow = sheet.addRow({ name: 'TOTAL', total_pay: grandTotal });
@@ -1365,6 +1390,34 @@ app.get('/api/wages/weekly/export', requireAuth, requireRole('finance', 'manager
     res.setHeader('Content-Disposition', `attachment; filename="weekly-wages-${start}-to-${end}.xlsx"`);
     await workbook.xlsx.write(res);
     res.end();
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/wages/weekly/pay-all', requireAuth, requireRole('finance', 'admin'), async (req, res) => {
+  try {
+    const { start, end, rows } = await computeWeeklyWages(req);
+    const site_id = req.user.site_id;
+    const toPay = rows.filter(r => !r.paid && r.total_pay > 0);
+    if (toPay.length === 0) return res.json({ ok: true, paid_count: 0, message: 'Nothing to pay — all workers already settled or no attendance this week.' });
+
+    const paymentRows = toPay.map(r => ({
+      site_id, worker_id: r.worker_id, week_start: start, week_end: end,
+      days_present: r.days_present, daily_rate: r.daily_rate, total_amount: r.total_pay, paid_by: req.user.id
+    }));
+    const { error: payErr } = await supabase.from('cst_wage_payments').insert(paymentRows);
+    if (payErr) return res.status(500).json({ error: payErr.message });
+
+    // Log a single reconciliation transaction covering the whole payroll run, already marked paid.
+    const grandTotal = toPay.reduce((s, r) => s + r.total_pay, 0);
+    const breakdown = toPay.map(r => `${r.name}: ${r.days_present}d x KES ${r.daily_rate} = KES ${r.total_pay.toLocaleString()}`).join('; ');
+    await supabase.from('cst_transactions').insert({
+      site_id, category: 'labor', description: `Weekly wages ${start} to ${end} (${toPay.length} workers): ${breakdown}`,
+      amount: grandTotal, transaction_date: new Date().toISOString().slice(0, 10),
+      status: 'paid', created_by: req.user.id, paid_by: req.user.id, paid_at: new Date().toISOString(),
+      manager_approved: true, finance_approved: true
+    });
+
+    res.json({ ok: true, paid_count: toPay.length, total_amount: grandTotal });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
