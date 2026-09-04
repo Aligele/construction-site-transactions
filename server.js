@@ -200,7 +200,7 @@ async function renderDashboard(){
     contentHtml += '<div class="card"><div class="topbar"><h2>Workers & attendance</h2><input id="attViewDate" type="date" /></div><div id="workerAttendanceView" class="muted">Loading...</div></div>';
   }
   if (user.role==='finance' || user.role==='manager' || user.role==='admin') {
-    contentHtml += '<div class="card"><div class="topbar"><h2>Weekly wages</h2><div><label style="display:inline;margin-right:6px;">Week starting</label><input id="wagesWeekStart" type="date" /></div></div><div id="weeklyWages" class="muted">Loading...</div><div style="margin-top:10px;"><button class="secondary" id="downloadWagesBtn">Download Excel</button></div></div>';
+    contentHtml += '<div class="card"><div class="topbar"><h2>Weekly wages</h2><div><label style="display:inline;margin-right:6px;">Week starting</label><input id="wagesWeekStart" type="date" /></div></div><div id="weeklyWages" class="muted">Loading...</div><div style="margin-top:10px;text-align:left;"><button class="success" id="downloadWagesBtn">Download Excel</button></div></div>';
   }
   content.innerHTML = contentHtml;
 
