@@ -53,10 +53,14 @@ const INDEX_HTML = `<!DOCTYPE html>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Site Transactions</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 :root{
   --sidebar:#16302278;--sidebar-bg:#173B29;--sidebar-active:#2f9e5c;--sidebar-text:#cfe3d6;--sidebar-text-dim:#7fa891;
   --navy:#1f2d3d;--amber:#d98c2b;--green:#2f7d4f;--red:#b03a3a;--bg:#f5f6f8;--card:#fff;--border:#dde1e6;
+  --forest:#0f2818;--forest2:#1c4a30;--moss:#7ab98a;--paper:#f6f4ee;
 }
 *{box-sizing:border-box;}
 body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;background:var(--bg);color:var(--navy);}
@@ -106,6 +110,45 @@ th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--border);} th
 .actions button{margin-right:4px;padding:5px 8px;font-size:12px;}
 .topbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;}
 .error{color:var(--red);font-size:13px;margin-top:8px;}
+
+/* ---- Premium login page ---- */
+.auth-shell{min-height:100vh;background:var(--paper);}
+.auth-hero{
+  position:relative;overflow:hidden;padding:36px 24px 30px;
+  background:
+    repeating-linear-gradient(0deg, rgba(255,255,255,.05) 0px, rgba(255,255,255,.05) 1px, transparent 1px, transparent 28px),
+    repeating-linear-gradient(90deg, rgba(255,255,255,.05) 0px, rgba(255,255,255,.05) 1px, transparent 1px, transparent 28px),
+    linear-gradient(160deg, var(--forest) 0%, var(--forest2) 75%);
+}
+.auth-hero-inner{position:relative;z-index:2;max-width:420px;margin:0 auto;opacity:0;animation:heroIn .6s ease-out forwards;}
+@keyframes heroIn{from{opacity:0;transform:translateY(10px);}to{opacity:1;transform:translateY(0);}}
+.auth-logo{width:52px;height:52px;border-radius:14px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.18);display:flex;align-items:center;justify-content:center;margin-bottom:16px;}
+.auth-title{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:28px;line-height:1.15;color:#fff;margin:0 0 8px;letter-spacing:-0.01em;}
+.auth-tagline{font-family:'Inter',sans-serif;color:var(--moss);font-size:14px;line-height:1.5;margin:0 0 20px;max-width:320px;}
+.flow-chips{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+.flow-chip{font-family:'Inter',sans-serif;font-size:12px;font-weight:500;color:#eaf3ec;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);padding:5px 11px;border-radius:20px;transition:background .15s,transform .15s;}
+.flow-chip:hover{background:rgba(255,255,255,.16);transform:translateY(-1px);}
+.flow-arrow{color:var(--moss);font-size:12px;}
+.auth-card-wrap{max-width:420px;margin:-18px auto 0;padding:0 24px 40px;position:relative;z-index:3;}
+.auth-card{background:#fff;border-radius:14px;padding:26px 22px;box-shadow:0 12px 32px rgba(15,40,24,.14);}
+.auth-card h2{font-family:'Space Grotesk',sans-serif;font-size:18px;margin:0 0 4px;color:var(--forest);}
+.auth-card .muted{margin-bottom:16px;}
+.auth-field{margin-bottom:14px;}
+.auth-field label{font-family:'Inter',sans-serif;}
+.auth-field input{
+  width:100%;box-sizing:border-box;border:1.5px solid var(--border);border-radius:9px;padding:11px 12px;
+  font-family:'Inter',sans-serif;font-size:15px;transition:border-color .15s,box-shadow .15s;
+}
+.auth-field input:focus{outline:none;border-color:var(--moss);box-shadow:0 0 0 3px rgba(122,185,138,.22);}
+.auth-submit{
+  width:100%;background:var(--forest);color:#fff;border:none;border-radius:9px;padding:13px;
+  font-family:'Inter',sans-serif;font-weight:600;font-size:15px;cursor:pointer;transition:background .15s,transform .1s;
+}
+.auth-submit:hover{background:var(--forest2);}
+.auth-submit:active{transform:scale(.98);}
+.auth-forgot{display:block;text-align:center;margin-top:14px;font-family:'Inter',sans-serif;font-size:13px;color:var(--forest2);text-decoration:none;}
+.auth-forgot:hover{text-decoration:underline;}
+
 </style>
 </head>
 <body>
@@ -127,7 +170,23 @@ function money(n){ return 'KES ' + Number(n).toLocaleString(undefined,{minimumFr
 function badge(s){ return '<span class="badge '+s+'">'+s+'</span>'; }
 function render(){ state.token ? renderDashboard() : renderLogin(); }
 function renderLogin(){
-  appEl.innerHTML = '<div class="card" style="max-width:360px;margin:60px auto;"><div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;"><div class="brand-logo" style="box-shadow:none;background:#eaf7ee;">'+TRUCK_SVG+'</div><div><h1 style="margin:0;">Site Transactions</h1><p class="muted" style="margin:0;">Construction Portal</p></div></div><p class="muted">Sign in to continue</p><label>Email</label><input id="email" type="email" placeholder="you@example.com" /><label>Password</label><input id="password" type="password" placeholder="********" /><div style="margin-top:16px;"><button id="loginBtn" style="width:100%;">Log in</button></div><p style="margin-top:10px;text-align:center;"><a href="#" id="forgotLink" style="font-size:13px;color:#1f2d3d;">Forgot password?</a></p><div class="error" id="err"></div><div class="muted" id="forgotMsg"></div></div>';
+  appEl.innerHTML =
+    '<div class="auth-shell">' +
+      '<div class="auth-hero"><div class="auth-hero-inner">' +
+        '<div class="auth-logo">'+TRUCK_SVG+'</div>' +
+        '<h1 class="auth-title">Site Transactions</h1>' +
+        '<p class="auth-tagline">Every shilling on site, tracked from the day it\\'s logged to the day it\\'s paid.</p>' +
+        '<div class="flow-chips"><span class="flow-chip">Log</span><span class="flow-arrow">&#8594;</span><span class="flow-chip">Approve</span><span class="flow-arrow">&#8594;</span><span class="flow-chip">Pay</span><span class="flow-arrow">&#8594;</span><span class="flow-chip">Reconcile</span></div>' +
+      '</div></div>' +
+      '<div class="auth-card-wrap"><div class="auth-card">' +
+        '<h2>Sign in</h2><p class="muted">Use the credentials your manager gave you.</p>' +
+        '<div class="auth-field"><label>Email</label><input id="email" type="email" placeholder="you@example.com" /></div>' +
+        '<div class="auth-field"><label>Password</label><input id="password" type="password" placeholder="********" /></div>' +
+        '<button class="auth-submit" id="loginBtn">Log in</button>' +
+        '<a href="#" id="forgotLink" class="auth-forgot">Forgot password?</a>' +
+        '<div class="error" id="err"></div><div class="muted" id="forgotMsg"></div>' +
+      '</div></div>' +
+    '</div>';
   document.getElementById('loginBtn').onclick = async () => {
     const email = document.getElementById('email').value.trim();
     const password = document.getElementById('password').value;
