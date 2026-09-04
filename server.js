@@ -1383,7 +1383,7 @@ app.get('/api/attendance', requireAuth, async (req, res) => {
 
 // ---------- Weekly wages (attendance days x daily rate) ----------
 async function computeWeeklyWages(req) {
-  const start = req.query.start || (() => {
+  const start = req.query.start || req.body?.start || (() => {
     const d = new Date();
     const day = d.getDay(); // 0=Sun
     const diffToMonday = day === 0 ? 6 : day - 1;
