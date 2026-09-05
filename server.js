@@ -366,9 +366,19 @@ function buildNotificationsHtml(user){
 function buildSettingsHtml(user){
   let html = '<div class="card"><h2>Change password</h2><div class="row"><div><label>Current password</label><input id="curPw" type="password" /></div><div><label>New password</label><input id="newPw" type="password" /></div></div><div style="margin-top:12px;"><button id="changePwBtn">Update password</button></div><div class="error" id="changePwErr"></div><div id="changePwOk" class="muted"></div></div>';
   if (user.role==='manager' || user.role==='admin') {
-    html += '<div class="card"><h2>Add a clerk or finance login</h2><div class="row"><div><label>Full name</label><input id="new_name" placeholder="Full name" /></div><div><label>Email</label><input id="new_email" type="email" placeholder="person@example.com" /></div><div><label>Role</label><select id="new_role"><option value="clerk">Clerk</option><option value="finance">Finance</option></select></div></div><div style="margin-top:12px;"><button id="createUserBtn">Create login</button></div><div class="error" id="createUserErr"></div><div id="createUserResult"></div></div>';
+    html += '<div class="card"><h2>Add a team login</h2><div class="row"><div><label>Full name</label><input id="new_name" placeholder="Full name" /></div><div><label>Email</label><input id="new_email" type="email" placeholder="person@example.com" /></div><div><label>Role</label><select id="new_role"><option value="clerk">Clerk</option><option value="finance">Finance</option><option value="storekeeper">Storekeeper</option></select></div></div><div style="margin-top:12px;"><button id="createUserBtn">Create login</button></div><div class="error" id="createUserErr"></div><div id="createUserResult"></div></div>';
     html += '<div class="card"><h2>Team logins</h2><div id="userList" class="muted">Loading...</div></div>';
   }
+  return html;
+}
+
+function buildStoreHtml(user){
+  const canManage = ['storekeeper','manager','admin'].includes(user.role);
+  let html = '';
+  if (canManage) {
+    html += '<div class="card"><h2>Add a material</h2><div class="row"><div><label>Material name</label><input id="item_name" placeholder="e.g. Cement (50kg bags)" /></div><div><label>Unit</label><input id="item_unit" placeholder="e.g. bags, liters, pieces" /></div></div><div class="row"><div><label>Initial quantity</label><input id="item_qty" type="number" step="0.01" placeholder="0" /></div><div><label>Reorder level (alert below this)</label><input id="item_reorder" type="number" step="0.01" placeholder="optional" /></div></div><div style="margin-top:12px;"><button id="addItemMaterialBtn">Add material</button></div><div class="error" id="addItemErr"></div></div>';
+  }
+  html += '<div class="card"><h2>Material stock</h2><div id="storeList" class="muted">Loading...</div></div>';
   return html;
 }
 
@@ -383,6 +393,7 @@ async function renderDashboard(){
         '<a class="nav-item active" id="navDashboard" data-view="dashboard"><span class="nav-icon">&#8962;</span> Dashboard</a>' +
         '<a class="nav-item" id="navTransactions" data-view="transactions"><span class="nav-icon">&#128203;</span> Transactions</a>' +
         (['clerk','finance','manager','admin'].includes(user.role) ? '<a class="nav-item" id="navRegistry" data-view="registry"><span class="nav-icon">&#128101;</span> Registry</a>' : '') +
+        '<a class="nav-item" id="navStore" data-view="store"><span class="nav-icon">&#128230;</span> Store</a>' +
         '<div class="nav-section-label">ACCOUNT</div>' +
         '<a class="nav-item" id="navNotifications" data-view="notifications"><span class="nav-icon">&#128276;</span> Notifications</a>' +
         '<a class="nav-item" id="navSettings" data-view="settings"><span class="nav-icon">&#9881;</span> Settings</a>' +
@@ -414,6 +425,7 @@ async function renderDashboard(){
     else if (view === 'registry') html = buildRegistryHtml(user);
     else if (view === 'notifications') html = buildNotificationsHtml(user);
     else if (view === 'settings') html = buildSettingsHtml(user);
+    else if (view === 'store') html = buildStoreHtml(user);
     content.innerHTML = html;
     wireContent();
     closeSidebar();
@@ -428,6 +440,21 @@ async function renderDashboard(){
     if (document.getElementById('summaryBox')) loadSummary();
     if (document.getElementById('notifList')) loadNotifications();
     if (document.getElementById('userList')) loadUsers();
+    if (document.getElementById('storeList')) loadStoreItems();
+    if (document.getElementById('addItemMaterialBtn')) {
+      document.getElementById('addItemMaterialBtn').onclick = async () => {
+        const name = document.getElementById('item_name').value.trim();
+        const unit = document.getElementById('item_unit').value.trim();
+        const initial_quantity = document.getElementById('item_qty').value;
+        const reorder_level = document.getElementById('item_reorder').value;
+        try {
+          await api('/store/items', {method:'POST', body: JSON.stringify({name, unit, initial_quantity, reorder_level})});
+          document.getElementById('addItemErr').textContent = '';
+          document.getElementById('item_name').value=''; document.getElementById('item_unit').value=''; document.getElementById('item_qty').value=''; document.getElementById('item_reorder').value='';
+          loadStoreItems();
+        } catch(e) { document.getElementById('addItemErr').textContent = e.message; }
+      };
+    }
     if (document.getElementById('workerAttendance')) {
       const dateInput = document.getElementById('attDate');
       dateInput.value = new Date().toISOString().slice(0,10);
@@ -901,6 +928,41 @@ async function loadDocuments(){
     });
   } catch(e) { el.textContent = 'Could not load documents.'; }
 }
+async function loadStoreItems(){
+  const el = document.getElementById('storeList');
+  const canManage = ['storekeeper','manager','admin'].includes(state.user.role);
+  const canDelete = ['manager','admin'].includes(state.user.role);
+  try {
+    const items = await api('/store/items');
+    if (!items.length) { el.textContent = 'No materials tracked yet.'; return; }
+    el.innerHTML = '<table><thead><tr><th>Material</th><th>In stock</th><th>Reorder at</th><th>Actions</th></tr></thead><tbody>' +
+      items.map(i => {
+        const low = i.reorder_level && Number(i.quantity_in_stock) <= Number(i.reorder_level);
+        return '<tr><td>'+i.name+'</td><td>'+(low?'<span class="badge rejected">':'')+i.quantity_in_stock+' '+i.unit+(low?'</span>':'')+'</td><td>'+(i.reorder_level||'—')+'</td>' +
+          '<td class="actions">'+(canManage?'<button class="success" data-move-in="'+i.id+'">Stock in</button> <button class="danger" data-move-out="'+i.id+'">Stock out</button>':'')+(canDelete?' <button class="secondary" data-del-item="'+i.id+'">Remove</button>':'')+'</td></tr>';
+      }).join('') +
+      '</tbody></table>';
+
+    el.querySelectorAll('[data-move-in],[data-move-out]').forEach(btn => {
+      btn.onclick = async () => {
+        const id = btn.dataset.moveIn || btn.dataset.moveOut;
+        const movement_type = btn.dataset.moveIn ? 'in' : 'out';
+        const quantity = prompt('Quantity to record ' + (movement_type==='in'?'IN (received)':'OUT (used/issued)') + ':');
+        if (!quantity) return;
+        const reason = prompt('Reason / note (optional):') || '';
+        try { await api('/store/items/'+id+'/movement', {method:'POST', body: JSON.stringify({movement_type, quantity, reason})}); loadStoreItems(); }
+        catch(e){ alert(e.message); }
+      };
+    });
+    el.querySelectorAll('[data-del-item]').forEach(btn => {
+      btn.onclick = async () => {
+        if (!confirm('Remove this material from tracking? Its movement history will also be deleted.')) return;
+        try { await api('/store/items/'+btn.dataset.delItem, {method:'DELETE'}); loadStoreItems(); }
+        catch(e){ alert(e.message); }
+      };
+    });
+  } catch(e) { el.textContent = 'Could not load store items.'; }
+}
 async function loadUsers(){
   const el = document.getElementById('userList');
   try {
@@ -1372,7 +1434,7 @@ app.post('/api/users', requireAuth, requireRole('manager', 'admin'), async (req,
   const { full_name, email, role } = req.body;
   if (!full_name || !email || !role) return res.status(400).json({ error: 'full_name, email and role are required' });
 
-  const allowedRoles = req.user.role === 'admin' ? ['clerk', 'manager', 'finance', 'admin'] : ['clerk', 'finance'];
+  const allowedRoles = req.user.role === 'admin' ? ['clerk', 'manager', 'finance', 'admin', 'storekeeper'] : ['clerk', 'finance', 'storekeeper'];
   if (!allowedRoles.includes(role)) return res.status(403).json({ error: `You can only create: ${allowedRoles.join(', ')}` });
 
   const site_id = req.body.site_id || req.user.site_id;
@@ -1932,6 +1994,76 @@ app.delete('/api/documents/:id', requireAuth, requireRole('manager', 'admin'), a
   const { error } = await supabase.from('cst_documents').delete().eq('id', req.params.id);
   if (error) return res.status(500).json({ error: error.message });
   res.json({ ok: true });
+});
+
+// ---------- Store / material inventory ----------
+app.get('/api/store/items', requireAuth, async (req, res) => {
+  let query = supabase.from('cst_store_items').select('*').order('name');
+  if (req.user.role !== 'admin') query = query.eq('site_id', req.user.site_id);
+  const { data, error } = await query;
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+app.post('/api/store/items', requireAuth, requireRole('storekeeper', 'manager', 'admin'), async (req, res) => {
+  const { name, unit, reorder_level, initial_quantity } = req.body;
+  if (!name || !unit) return res.status(400).json({ error: 'name and unit are required' });
+  const site_id = req.user.site_id;
+  if (!site_id) return res.status(400).json({ error: 'Your account has no site associated with it' });
+
+  const { data, error } = await supabase.from('cst_store_items').insert({
+    site_id, name, unit, reorder_level: reorder_level || 0, quantity_in_stock: initial_quantity || 0, created_by: req.user.id
+  }).select().single();
+  if (error) {
+    if (error.message.includes('duplicate')) return res.status(409).json({ error: 'An item with this name already exists at this site' });
+    return res.status(500).json({ error: error.message });
+  }
+
+  if (initial_quantity && Number(initial_quantity) > 0) {
+    await supabase.from('cst_store_movements').insert({
+      item_id: data.id, site_id, movement_type: 'in', quantity: initial_quantity, reason: 'Initial stock', recorded_by: req.user.id
+    });
+  }
+  res.status(201).json(data);
+});
+
+app.delete('/api/store/items/:id', requireAuth, requireRole('manager', 'admin'), async (req, res) => {
+  const { error } = await supabase.from('cst_store_items').delete().eq('id', req.params.id);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
+});
+
+app.post('/api/store/items/:id/movement', requireAuth, requireRole('storekeeper', 'manager', 'admin'), async (req, res) => {
+  const { movement_type, quantity, reason } = req.body;
+  if (!['in', 'out'].includes(movement_type)) return res.status(400).json({ error: 'movement_type must be "in" or "out"' });
+  if (!quantity || Number(quantity) <= 0) return res.status(400).json({ error: 'quantity must be greater than 0' });
+
+  const { data: item, error: itemErr } = await supabase.from('cst_store_items').select('*').eq('id', req.params.id).single();
+  if (itemErr || !item) return res.status(404).json({ error: 'Item not found' });
+
+  const newQty = movement_type === 'in' ? Number(item.quantity_in_stock) + Number(quantity) : Number(item.quantity_in_stock) - Number(quantity);
+  if (newQty < 0) return res.status(400).json({ error: `Not enough stock — only ${item.quantity_in_stock} ${item.unit} available` });
+
+  const { error: updErr } = await supabase.from('cst_store_items').update({ quantity_in_stock: newQty, updated_at: new Date().toISOString() }).eq('id', item.id);
+  if (updErr) return res.status(500).json({ error: updErr.message });
+
+  const { data: movement, error: movErr } = await supabase.from('cst_store_movements').insert({
+    item_id: item.id, site_id: item.site_id, movement_type, quantity, reason: reason || null, recorded_by: req.user.id
+  }).select().single();
+  if (movErr) return res.status(500).json({ error: movErr.message });
+
+  if (item.reorder_level && newQty <= Number(item.reorder_level)) {
+    const { data: recipients } = await supabase.from('cst_users').select('id').eq('site_id', item.site_id).in('role', ['manager', 'storekeeper']);
+    for (const r of (recipients || [])) await notify(r.id, null, 'batch_submitted', `Low stock alert: "${item.name}" is down to ${newQty} ${item.unit} (reorder level: ${item.reorder_level}).`);
+  }
+
+  res.status(201).json({ item: { ...item, quantity_in_stock: newQty }, movement });
+});
+
+app.get('/api/store/items/:id/movements', requireAuth, async (req, res) => {
+  const { data, error } = await supabase.from('cst_store_movements').select('*, recorder:recorded_by(full_name)').eq('item_id', req.params.id).order('created_at', { ascending: false }).limit(50);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
 });
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
