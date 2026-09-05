@@ -404,6 +404,19 @@ function buildStoreHtml(user){
   return html;
 }
 
+function buildAnalyticsHtml(user){
+  const isManager = ['manager','admin'].includes(user.role);
+  let html = '<div class="card"><h2>'+(isManager?'Analytics — everything':'Financial analytics')+'</h2><p class="muted">'+(isManager?'A full picture of transactions, workers, store, and documents at your site.':'Money-related analytics only — transactions, wages, and payment status.')+'</p></div>';
+  html += '<div class="card"><h2>Transactions by status</h2><div id="analyticsStatusChart" class="muted"><div class="skeleton" style="width:80%;"></div></div></div>';
+  html += '<div class="card"><h2>Transactions by category</h2><div id="analyticsCategoryChart" class="muted"><div class="skeleton" style="width:80%;"></div></div></div>';
+  html += '<div class="card"><h2>Weekly transaction trend (last 6 weeks)</h2><div id="analyticsTrendChart" class="muted"><div class="skeleton" style="width:80%;"></div></div></div>';
+  html += '<div class="card"><h2>Wages paid to date</h2><div id="analyticsWages" class="muted"><div class="skeleton" style="width:50%;"></div></div></div>';
+  if (isManager) {
+    html += '<div class="card"><h2>Site operations</h2><div id="analyticsOperational" class="muted"><div class="skeleton" style="width:70%;"></div></div></div>';
+  }
+  return html;
+}
+
 async function renderDashboard(){
   const {user} = state;
   appEl.innerHTML =
@@ -412,10 +425,11 @@ async function renderDashboard(){
       '<aside class="sidebar" id="sidebar">' +
         '<div class="brand"><div class="brand-logo">'+TRUCK_SVG+'</div><div><div class="brand-title">Site Transactions</div><div class="brand-sub">Construction Portal</div></div></div>' +
         '<div class="nav-section-label">MAIN</div>' +
-        '<a class="nav-item active" id="navDashboard" data-view="dashboard"><span class="nav-icon">&#8962;</span> Dashboard</a>' +
-        '<a class="nav-item" id="navTransactions" data-view="transactions"><span class="nav-icon">&#128203;</span> Transactions</a>' +
+        (['manager','finance','admin'].includes(user.role) ? '<a class="nav-item" id="navDashboard" data-view="dashboard"><span class="nav-icon">&#8962;</span> Dashboard</a>' : '') +
+        (['manager','finance','admin'].includes(user.role) ? '<a class="nav-item" id="navAnalytics" data-view="analytics"><span class="nav-icon">&#128202;</span> Analytics</a>' : '') +
+        (['clerk','finance','manager','admin'].includes(user.role) ? '<a class="nav-item" id="navTransactions" data-view="transactions"><span class="nav-icon">&#128203;</span> Transactions</a>' : '') +
         (['clerk','finance','manager','admin'].includes(user.role) ? '<a class="nav-item" id="navRegistry" data-view="registry"><span class="nav-icon">&#128101;</span> Registry</a>' : '') +
-        '<a class="nav-item" id="navStore" data-view="store"><span class="nav-icon">&#128230;</span> Store</a>' +
+        (['storekeeper','finance','manager','admin'].includes(user.role) ? '<a class="nav-item" id="navStore" data-view="store"><span class="nav-icon">&#128230;</span> Store</a>' : '') +
         '<div class="nav-section-label">ACCOUNT</div>' +
         '<a class="nav-item" id="navNotifications" data-view="notifications"><span class="nav-icon">&#128276;</span> Notifications</a>' +
         '<a class="nav-item" id="navSettings" data-view="settings"><span class="nav-icon">&#9881;</span> Settings</a>' +
@@ -448,6 +462,7 @@ async function renderDashboard(){
     else if (view === 'notifications') html = buildNotificationsHtml(user);
     else if (view === 'settings') html = buildSettingsHtml(user);
     else if (view === 'store') html = buildStoreHtml(user);
+    else if (view === 'analytics') html = buildAnalyticsHtml(user);
     content.innerHTML = html;
     wireContent();
     closeSidebar();
@@ -463,6 +478,7 @@ async function renderDashboard(){
     if (document.getElementById('notifList')) loadNotifications();
     if (document.getElementById('userList')) loadUsers();
     if (document.getElementById('storeList')) loadStoreItems();
+    if (document.getElementById('analyticsStatusChart')) loadAnalytics();
     if (document.getElementById('downloadStockPdfBtn')) {
       document.getElementById('downloadStockPdfBtn').onclick = () => {
         fetch(API+'/store/report.pdf', {headers:{Authorization:'Bearer '+state.token}}).then(r=>r.blob()).then(blob=>{
@@ -719,7 +735,9 @@ async function renderDashboard(){
     if (document.getElementById('table')) loadTable();
   }
 
-  switchView('dashboard', document.getElementById('navDashboard'));
+  const defaultView = ['manager','finance','admin'].includes(user.role) ? 'dashboard' : (user.role === 'storekeeper' ? 'store' : 'transactions');
+  const defaultNavId = { dashboard: 'navDashboard', store: 'navStore', transactions: 'navTransactions' }[defaultView];
+  switchView(defaultView, document.getElementById(defaultNavId));
 }
 let tablePage = 0;
 const PAGE_SIZE = 20;
@@ -886,6 +904,54 @@ function donutChart(segments, size){
   }).join('');
   return '<svg width="'+size+'" height="'+size+'" viewBox="0 0 '+size+' '+size+'">'+
     '<circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="none" stroke="#eee" stroke-width="14"/>'+arcs+'</svg>';
+}
+function simpleBarChart(rows, maxWidth){
+  maxWidth = maxWidth || 100;
+  const max = Math.max(...rows.map(r=>r.value), 1);
+  return rows.map(r =>
+    '<div style="margin-bottom:8px;"><div class="muted" style="display:flex;justify-content:space-between;font-size:12px;"><span>'+r.label+'</span><span>'+money(r.value)+'</span></div>' +
+    '<div style="background:#eee;border-radius:6px;height:10px;overflow:hidden;"><div style="width:'+Math.max((r.value/max)*maxWidth,2)+'%;height:100%;background:'+(r.color||'#2f7d4f')+';border-radius:6px;transition:width .6s ease;"></div></div></div>'
+  ).join('');
+}
+async function loadAnalytics(){
+  try {
+    const { financial, operational } = await api('/analytics');
+
+    const statusColors = { pending:'#d98c2b', approved:'#4a9d68', paid:'#2f7d4f', rejected:'#b03a3a' };
+    const statusRows = Object.entries(financial.by_status).map(([k,v]) => ({label:k, value:v, color:statusColors[k]}));
+    document.getElementById('analyticsStatusChart').innerHTML =
+      '<div style="display:flex;gap:20px;flex-wrap:wrap;align-items:center;"><div style="flex-shrink:0;">'+donutChart(statusRows.map(r=>({value:r.value,color:r.color})))+'</div><div style="flex:1;min-width:200px;">'+simpleBarChart(statusRows)+'</div></div>';
+
+    const catColors = ['#2f7d4f','#d98c2b','#4a7fb0','#8a5fb0','#b0895f'];
+    const catRows = Object.entries(financial.by_category).map(([k,v],i) => ({label:k, value:v, color:catColors[i%catColors.length]}));
+    document.getElementById('analyticsCategoryChart').innerHTML = catRows.length ? simpleBarChart(catRows) : '<p class="muted">No transactions recorded yet.</p>';
+
+    const trendMax = Math.max(...financial.weekly_trend.map(w=>w.total), 1);
+    document.getElementById('analyticsTrendChart').innerHTML = '<div style="display:flex;align-items:flex-end;gap:8px;height:120px;">' +
+      financial.weekly_trend.map(w => {
+        const h = Math.max((w.total/trendMax)*100, 2);
+        return '<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;"><div style="width:100%;background:#2f7d4f;border-radius:4px 4px 0 0;height:'+h+'%;transition:height .6s ease;" title="'+money(w.total)+'"></div><div class="muted" style="font-size:10px;margin-top:4px;">'+w.start.slice(5)+'</div></div>';
+      }).join('') + '</div>';
+
+    document.getElementById('analyticsWages').innerHTML = '<div class="stat-num" style="color:#2f7d4f;">'+money(financial.wages_paid_total)+'</div><p class="muted">Total wages disbursed across all recorded weekly payments.</p>';
+
+    if (operational && document.getElementById('analyticsOperational')) {
+      document.getElementById('analyticsOperational').innerHTML =
+        '<div class="row">' +
+        '<div class="stat-card"><div class="muted">Workers enrolled</div><div class="stat-num">'+operational.worker_count+'</div></div>' +
+        '<div class="stat-card"><div class="muted">Present today</div><div class="stat-num">'+operational.present_today+'/'+operational.worker_count+'</div></div>' +
+        '<div class="stat-card"><div class="muted">Materials tracked</div><div class="stat-num">'+operational.store_item_count+'</div></div>' +
+        '<div class="stat-card"><div class="muted">Low stock items</div><div class="stat-num" style="color:'+(operational.low_stock_count?'#b03a3a':'#2f7d4f')+';">'+operational.low_stock_count+'</div></div>' +
+        '<div class="stat-card"><div class="muted">Documents uploaded</div><div class="stat-num">'+operational.documents_count+'</div></div>' +
+        '<div class="stat-card"><div class="muted">Documents read by AI</div><div class="stat-num">'+operational.documents_read_count+'</div></div>' +
+        '</div>';
+    }
+  } catch(e) {
+    ['analyticsStatusChart','analyticsCategoryChart','analyticsTrendChart','analyticsWages','analyticsOperational'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = 'Could not load analytics.';
+    });
+  }
 }
 async function loadSummary(){
   const el = document.getElementById('summaryBox');
@@ -1255,6 +1321,7 @@ app.post('/api/transactions', requireAuth, requireRole('clerk', 'admin'), async 
 app.get('/api/transactions', requireAuth, async (req, res) => {
   const { status, site_id, category, search, from_date, to_date, limit, offset } = req.query;
   let query = supabase.from('cst_transactions').select('*', { count: 'exact' }).order('created_at', { ascending: false });
+  if (req.user.role === 'clerk') query = query.eq('created_by', req.user.id);
   if (status) query = query.eq('status', status);
   if (site_id) query = query.eq('site_id', site_id);
   if (category) query = query.eq('category', category);
@@ -2209,6 +2276,68 @@ app.get('/api/store/items/:id/movements', requireAuth, async (req, res) => {
   const { data, error } = await supabase.from('cst_store_movements').select('*, recorder:recorded_by(full_name)').eq('item_id', req.params.id).order('created_at', { ascending: false }).limit(50);
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
+});
+
+// ---------- Analytics ----------
+app.get('/api/analytics', requireAuth, requireRole('manager', 'finance', 'admin'), async (req, res) => {
+  try {
+    const siteFilter = (q) => req.user.role !== 'admin' ? q.eq('site_id', req.user.site_id) : q;
+
+    const { data: txns } = await siteFilter(supabase.from('cst_transactions').select('status, category, amount, transaction_date'));
+    const byCategory = {};
+    const byStatus = { pending: 0, approved: 0, paid: 0, rejected: 0 };
+    for (const t of (txns || [])) {
+      const amt = Number(t.amount) || 0;
+      byCategory[t.category] = (byCategory[t.category] || 0) + amt;
+      if (byStatus[t.status] !== undefined) byStatus[t.status] += amt;
+    }
+
+    // Weekly trend: last 6 ISO weeks (Monday start)
+    const weeks = [];
+    const today = new Date();
+    const day = today.getDay();
+    const diffToMonday = day === 0 ? 6 : day - 1;
+    const thisMonday = new Date(today);
+    thisMonday.setDate(today.getDate() - diffToMonday);
+    for (let i = 5; i >= 0; i--) {
+      const start = new Date(thisMonday);
+      start.setDate(thisMonday.getDate() - i * 7);
+      const end = new Date(start);
+      end.setDate(start.getDate() + 6);
+      weeks.push({ start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10), total: 0, paid: 0 });
+    }
+    for (const t of (txns || [])) {
+      const w = weeks.find(w => t.transaction_date >= w.start && t.transaction_date <= w.end);
+      if (w) { w.total += Number(t.amount) || 0; if (t.status === 'paid') w.paid += Number(t.amount) || 0; }
+    }
+
+    const { data: wagePayments } = await siteFilter(supabase.from('cst_wage_payments').select('total_amount'));
+    const wagesPaidTotal = (wagePayments || []).reduce((s, w) => s + Number(w.total_amount), 0);
+
+    const financial = { by_category: byCategory, by_status: byStatus, weekly_trend: weeks, wages_paid_total: wagesPaidTotal };
+
+    let operational = null;
+    if (['manager', 'admin'].includes(req.user.role)) {
+      const { data: workers } = await siteFilter(supabase.from('cst_workers').select('id'));
+      const todayStr = new Date().toISOString().slice(0, 10);
+      const { data: todayAtt } = await siteFilter(supabase.from('cst_attendance').select('worker_id').eq('attendance_date', todayStr));
+      const { data: items } = await siteFilter(supabase.from('cst_store_items').select('quantity_in_stock, reorder_level'));
+      const lowStock = (items || []).filter(i => i.reorder_level && Number(i.quantity_in_stock) <= Number(i.reorder_level)).length;
+      const { data: docs } = await siteFilter(supabase.from('cst_documents').select('extraction_status'));
+      const docsRead = (docs || []).filter(d => d.extraction_status === 'done').length;
+
+      operational = {
+        worker_count: (workers || []).length,
+        present_today: (todayAtt || []).length,
+        store_item_count: (items || []).length,
+        low_stock_count: lowStock,
+        documents_count: (docs || []).length,
+        documents_read_count: docsRead
+      };
+    }
+
+    res.json({ financial, operational });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
