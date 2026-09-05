@@ -868,16 +868,22 @@ async function loadDocuments(){
   try {
     const docs = await api('/documents');
     if (!docs.length) { el.textContent = 'No documents uploaded yet.'; return; }
-    el.innerHTML = docs.map(d => {
+    const readCount = docs.filter(d=>d.extraction_status==='done').length;
+    const pendingCount = docs.filter(d=>d.extraction_status==='pending').length;
+    const failedCount = docs.filter(d=>d.extraction_status==='failed').length;
+    let html = '<p class="muted"><strong>'+docs.length+'</strong> document(s) uploaded — '+readCount+' read'+(pendingCount?', '+pendingCount+' analyzing':'')+(failedCount?', '+failedCount+' unreadable':'')+'.</p>';
+    html += docs.map(d => {
       const statusBadge = d.extraction_status==='done' ? '<span class="badge paid">read</span>' : d.extraction_status==='failed' ? '<span class="badge rejected">unreadable</span>' : d.extraction_status==='skipped' ? '<span class="muted">not analyzed</span>' : '<span class="badge pending">analyzing</span>';
+      const uploaderLine = d.uploader ? d.uploader.full_name+' ('+d.uploader.role+')' : 'Unknown';
       return '<div class="card" style="margin-bottom:10px;padding:14px;">' +
         '<div class="topbar"><strong>'+d.file_name+'</strong>'+statusBadge+'</div>' +
         (d.description?'<div class="muted">'+d.description+'</div>':'') +
-        '<div class="muted" style="margin:6px 0;">Uploaded '+new Date(d.created_at).toLocaleDateString()+'</div>' +
+        '<div class="muted" style="margin:6px 0;">Uploaded by '+uploaderLine+' on '+new Date(d.created_at).toLocaleDateString()+'</div>' +
         (d.extracted_text?'<div style="background:#f5f6f8;border-radius:6px;padding:8px;font-size:13px;margin:6px 0;">'+d.extracted_text+'</div>':'') +
         '<div class="actions">'+(d.download_url?'<a href="'+d.download_url+'" target="_blank"><button class="secondary">Download</button></a>':'')+(canDelete?' <button class="danger" data-del-doc="'+d.id+'">Delete</button>':'')+'</div>' +
       '</div>';
     }).join('');
+    el.innerHTML = html;
     el.querySelectorAll('[data-del-doc]').forEach(btn => {
       btn.onclick = async () => {
         if (!confirm('Delete this document?')) return;
@@ -1866,7 +1872,7 @@ app.post('/api/documents', requireAuth, upload.single('file'), async (req, res) 
 });
 
 app.get('/api/documents', requireAuth, async (req, res) => {
-  let query = supabase.from('cst_documents').select('*').order('created_at', { ascending: false });
+  let query = supabase.from('cst_documents').select('*, uploader:uploaded_by(full_name, role)').order('created_at', { ascending: false });
   if (req.user.role !== 'admin') query = query.eq('site_id', req.user.site_id);
   const { data, error } = await query;
   if (error) return res.status(500).json({ error: error.message });
