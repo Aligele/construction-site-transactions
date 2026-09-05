@@ -217,22 +217,44 @@ body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans
 .bell .dot{position:absolute;top:-3px;right:-4px;background:var(--red);color:#fff;font-size:9px;border-radius:10px;padding:1px 4px;}
 #content{max-width:900px;margin:0 auto;padding:20px;}
 
-.card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:20px;margin-bottom:16px;}
-h1{font-size:22px;margin:0 0 4px;} h2{font-size:17px;margin:0 0 12px;} .muted{color:#6b7684;font-size:13px;}
-input,select,textarea,button{font-family:inherit;font-size:14px;padding:9px 10px;border-radius:6px;border:1px solid var(--border);}
-label{display:block;font-size:13px;margin:10px 0 4px;font-weight:600;}
-button{background:var(--navy);color:#fff;border:none;cursor:pointer;font-weight:600;}
-button:hover{opacity:.9;} button.secondary{background:#eef0f3;color:var(--navy);}
-button.danger{background:var(--red);} button.success{background:var(--green);}
+.card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(15,40,24,.04);transition:box-shadow .2s ease,transform .2s ease;}
+.card:hover{box-shadow:0 6px 20px rgba(15,40,24,.08);}
+h1{font-family:'Space Grotesk',sans-serif;font-size:22px;margin:0 0 4px;letter-spacing:-0.01em;}
+h2{font-family:'Space Grotesk',sans-serif;font-size:16px;margin:0 0 12px;font-weight:600;color:var(--forest);letter-spacing:-0.01em;}
+.muted{color:#6b7684;font-size:13px;}
+input,select,textarea,button{font-family:'Inter',-apple-system,sans-serif;font-size:14px;padding:10px 12px;border-radius:8px;border:1.5px solid var(--border);}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--moss);box-shadow:0 0 0 3px rgba(122,185,138,.18);}
+label{display:block;font-size:12px;margin:10px 0 5px;font-weight:600;color:#4a5a50;text-transform:uppercase;letter-spacing:.03em;}
+button{background:var(--forest);color:#fff;border:none;cursor:pointer;font-weight:600;transition:background .15s ease,transform .08s ease,box-shadow .15s ease;}
+button:hover{background:var(--forest2);box-shadow:0 3px 10px rgba(15,40,24,.18);}
+button:active{transform:scale(.97);}
+button.secondary{background:#eef0f3;color:var(--navy);} button.secondary:hover{background:#e2e5ea;box-shadow:none;}
+button.danger{background:var(--red);} button.danger:hover{background:#8f2e2e;}
+button.success{background:var(--sidebar-active);} button.success:hover{background:#268049;}
 .row{display:flex;gap:10px;flex-wrap:wrap;} .row>*{flex:1;min-width:160px;}
 table{width:100%;border-collapse:collapse;margin-top:10px;font-size:13px;}
-th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--border);} th{color:#6b7684;font-weight:600;}
-.badge{padding:2px 8px;border-radius:20px;font-size:12px;font-weight:600;}
+th,td{text-align:left;padding:9px 8px;border-bottom:1px solid var(--border);}
+th{color:#6b7684;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.03em;}
+tbody tr{transition:background .12s ease;} tbody tr:hover{background:#f5f9f6;}
+.badge{padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:.02em;}
 .badge.pending{background:#fdf0dc;color:var(--amber);} .badge.approved{background:#e2f1e8;color:var(--green);}
 .badge.paid{background:#dfeee5;color:var(--green);} .badge.rejected{background:#f6e2e2;color:var(--red);}
-.actions button{margin-right:4px;padding:5px 8px;font-size:12px;}
-.topbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;}
+.actions button{margin-right:4px;padding:6px 10px;font-size:12px;border-radius:6px;}
+.topbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:8px;}
 .error{color:var(--red);font-size:13px;margin-top:8px;}
+
+/* ---- View transitions & loading states ---- */
+#content > *{animation:viewFadeIn .35s ease both;}
+#content > *:nth-child(2){animation-delay:.04s;} #content > *:nth-child(3){animation-delay:.08s;}
+#content > *:nth-child(4){animation-delay:.12s;} #content > *:nth-child(5){animation-delay:.16s;}
+@keyframes viewFadeIn{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:translateY(0);}}
+.skeleton{background:linear-gradient(90deg,#eef1ef 25%,#e2e8e4 37%,#eef1ef 63%);background-size:400% 100%;animation:skeletonShine 1.4s ease infinite;border-radius:6px;height:14px;margin:6px 0;}
+@keyframes skeletonShine{0%{background-position:100% 50%;}100%{background-position:0 50%;}}
+.stat-card{background:#f5f6f8;border-radius:10px;padding:14px;transition:transform .18s ease,box-shadow .18s ease;}
+.stat-card:hover{transform:translateY(-2px);box-shadow:0 6px 16px rgba(15,40,24,.1);}
+.stat-num{font-family:'Space Grotesk',sans-serif;font-size:19px;font-weight:700;}
+.nav-item{transition:background .15s ease,transform .1s ease;}
+.nav-item:active{transform:scale(.97);}
 
 /* ---- Premium login page ---- */
 .auth-shell{min-height:100vh;background:var(--paper);}
@@ -329,7 +351,7 @@ function renderLogin(){
 }
 function buildOverviewHtml(user){
   const canExport = ['manager','finance','admin'].includes(user.role);
-  return '<div class="card"><div class="topbar"><h2>Overview</h2>'+(canExport?'<button class="success" id="overviewExportBtn">Download Excel</button>':'')+'</div><div id="summaryBox" class="muted">Loading...</div></div>';
+  return '<div class="card"><div class="topbar"><h2>Overview</h2>'+(canExport?'<button class="success" id="overviewExportBtn">Download Excel</button>':'')+'</div><div id="summaryBox"><div class="skeleton" style="width:90%;"></div><div class="skeleton" style="width:70%;"></div><div class="skeleton" style="width:80%;"></div></div></div>';
 }
 function buildTransactionsHtml(user){
   let html = '';
@@ -353,21 +375,21 @@ function buildRegistryHtml(user){
     html += '<div class="card"><div class="topbar"><h2>Daily attendance</h2><input id="attDate" type="date" /></div><div id="workerAttendance" class="muted">Loading workers...</div><div style="margin-top:12px;"><button id="submitAttendance">Submit today\\'s attendance</button></div><div class="error" id="attendanceErr"></div><div id="attendanceOk" class="muted"></div></div>';
   }
   if (user.role==='manager' || user.role==='finance') {
-    html += '<div class="card"><div class="topbar"><h2>Workers & attendance</h2><input id="attViewDate" type="date" /></div><div id="workerAttendanceView" class="muted">Loading...</div></div>';
+    html += '<div class="card"><div class="topbar"><h2>Workers & attendance</h2><input id="attViewDate" type="date" /></div><div id="workerAttendanceView"><div class="skeleton" style="width:85%;"></div><div class="skeleton" style="width:60%;"></div></div></div>';
   }
   if (user.role==='finance' || user.role==='manager' || user.role==='admin') {
-    html += '<div class="card"><div class="topbar"><h2>Weekly wages</h2><div><label style="display:inline;margin-right:6px;">Week starting</label><input id="wagesWeekStart" type="date" /></div></div><div id="weeklyWages" class="muted">Loading...</div><div style="margin-top:10px;text-align:left;">'+(['finance','admin'].includes(user.role)?'<button class="success" id="payAllWagesBtn">Pay all wages</button> ':'')+'<button class="success" id="downloadWagesBtn">Download Excel</button></div><div class="error" id="payWagesErr"></div><div class="muted" id="payWagesOk"></div></div>';
+    html += '<div class="card"><div class="topbar"><h2>Weekly wages</h2><div><label style="display:inline;margin-right:6px;">Week starting</label><input id="wagesWeekStart" type="date" /></div></div><div id="weeklyWages"><div class="skeleton" style="width:85%;"></div><div class="skeleton" style="width:60%;"></div></div><div style="margin-top:10px;text-align:left;">'+(['finance','admin'].includes(user.role)?'<button class="success" id="payAllWagesBtn">Pay all wages</button> ':'')+'<button class="success" id="downloadWagesBtn">Download Excel</button></div><div class="error" id="payWagesErr"></div><div class="muted" id="payWagesOk"></div></div>';
   }
   return html;
 }
 function buildNotificationsHtml(user){
-  return '<div class="card"><div class="topbar"><h2>Notifications</h2><span class="muted" id="notifCount"></span></div><div id="notifList" class="muted">Loading...</div></div>';
+  return '<div class="card"><div class="topbar"><h2>Notifications</h2><span class="muted" id="notifCount"></span></div><div id="notifList"><div class="skeleton" style="width:85%;"></div><div class="skeleton" style="width:60%;"></div></div></div>';
 }
 function buildSettingsHtml(user){
   let html = '<div class="card"><h2>Change password</h2><div class="row"><div><label>Current password</label><input id="curPw" type="password" /></div><div><label>New password</label><input id="newPw" type="password" /></div></div><div style="margin-top:12px;"><button id="changePwBtn">Update password</button></div><div class="error" id="changePwErr"></div><div id="changePwOk" class="muted"></div></div>';
   if (user.role==='manager' || user.role==='admin') {
     html += '<div class="card"><h2>Add a team login</h2><div class="row"><div><label>Full name</label><input id="new_name" placeholder="Full name" /></div><div><label>Email</label><input id="new_email" type="email" placeholder="person@example.com" /></div><div><label>Role</label><select id="new_role"><option value="clerk">Clerk</option><option value="finance">Finance</option><option value="storekeeper">Storekeeper</option></select></div></div><div style="margin-top:12px;"><button id="createUserBtn">Create login</button></div><div class="error" id="createUserErr"></div><div id="createUserResult"></div></div>';
-    html += '<div class="card"><h2>Team logins</h2><div id="userList" class="muted">Loading...</div></div>';
+    html += '<div class="card"><h2>Team logins</h2><div id="userList"><div class="skeleton" style="width:85%;"></div><div class="skeleton" style="width:60%;"></div></div></div>';
   }
   return html;
 }
@@ -378,7 +400,7 @@ function buildStoreHtml(user){
   if (canManage) {
     html += '<div class="card"><h2>Add a material</h2><div class="row"><div><label>Material name</label><input id="item_name" placeholder="e.g. Cement (50kg bags)" /></div><div><label>Unit</label><input id="item_unit" placeholder="e.g. bags, liters, pieces" /></div></div><div class="row"><div><label>Initial quantity</label><input id="item_qty" type="number" step="0.01" placeholder="0" /></div><div><label>Reorder level (alert below this)</label><input id="item_reorder" type="number" step="0.01" placeholder="optional" /></div></div><div style="margin-top:12px;"><button id="addItemMaterialBtn">Add material</button></div><div class="error" id="addItemErr"></div></div>';
   }
-  html += '<div class="card"><div class="topbar"><h2>Material stock</h2><button class="success" id="downloadStockPdfBtn">Download PDF report</button></div><div id="storeList" class="muted">Loading...</div></div>';
+  html += '<div class="card"><div class="topbar"><h2>Material stock</h2><button class="success" id="downloadStockPdfBtn">Download PDF report</button></div><div id="storeList"><div class="skeleton" style="width:85%;"></div><div class="skeleton" style="width:60%;"></div></div></div>';
   return html;
 }
 
@@ -838,6 +860,33 @@ async function toggleDetails(txnId){
     };
   } catch(e) { body.textContent = 'Could not load details: ' + e.message; }
 }
+function animateCount(el, target){
+  const start = 0;
+  const duration = 700;
+  const startTime = performance.now();
+  function step(now){
+    const progress = Math.min((now - startTime) / duration, 1);
+    const eased = 1 - Math.pow(1 - progress, 3);
+    el.textContent = money(start + (target - start) * eased);
+    if (progress < 1) requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+}
+function donutChart(segments, size){
+  size = size || 120;
+  const r = size/2 - 10, cx = size/2, cy = size/2, circ = 2*Math.PI*r;
+  const total = segments.reduce((s,seg)=>s+seg.value, 0) || 1;
+  let offset = 0;
+  const arcs = segments.filter(s=>s.value>0).map(seg => {
+    const frac = seg.value/total;
+    const dash = frac*circ;
+    const el = '<circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="none" stroke="'+seg.color+'" stroke-width="14" stroke-dasharray="'+dash+' '+(circ-dash)+'" stroke-dashoffset="'+(-offset)+'" transform="rotate(-90 '+cx+' '+cy+')" stroke-linecap="butt"><animate attributeName="stroke-dashoffset" from="0" to="'+(-offset)+'" dur=".6s" fill="freeze"/></circle>';
+    offset += dash;
+    return el;
+  }).join('');
+  return '<svg width="'+size+'" height="'+size+'" viewBox="0 0 '+size+' '+size+'">'+
+    '<circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="none" stroke="#eee" stroke-width="14"/>'+arcs+'</svg>';
+}
 async function loadSummary(){
   const el = document.getElementById('summaryBox');
   try {
@@ -848,17 +897,25 @@ async function loadSummary(){
       {label:'Paid', amt:s.paid, count:s.paid_count, color:'#2f7d4f'},
       {label:'Rejected', amt:s.rejected, count:s.rejected_count, color:'#b03a3a'}
     ];
-    let html = '<div class="row">' + cards.map(c =>
-      '<div style="background:#f5f6f8;border-radius:8px;padding:12px;"><div class="muted">'+c.label+' ('+c.count+')</div><div style="font-size:18px;font-weight:700;color:'+c.color+';">'+money(c.amt)+'</div></div>'
-    ).join('') + '</div>';
+    const chartSegments = [
+      {value:s.pending, color:'#d98c2b'}, {value:s.approved, color:'#4a9d68'},
+      {value:s.paid, color:'#2f7d4f'}, {value:s.rejected, color:'#b03a3a'}
+    ];
+    const hasAny = chartSegments.some(c=>c.value>0);
+    let html = '<div style="display:flex;gap:20px;flex-wrap:wrap;align-items:center;">';
+    if (hasAny) html += '<div style="flex-shrink:0;">'+donutChart(chartSegments)+'</div>';
+    html += '<div class="row" style="flex:1;min-width:220px;">' + cards.map((c,i) =>
+      '<div class="stat-card"><div class="muted">'+c.label+' ('+c.count+')</div><div class="stat-num" id="statNum'+i+'" style="color:'+c.color+';">KES 0.00</div></div>'
+    ).join('') + '</div></div>';
     if ((s.documents_paid||0) + (s.documents_pending||0) + (s.documents_unclear||0) > 0) {
-      html += '<h2 style="margin-top:18px;font-size:14px;">From uploaded documents</h2><div class="row">' +
-        '<div style="background:#f5f6f8;border-radius:8px;padding:12px;"><div class="muted">Paid (from docs)</div><div style="font-size:18px;font-weight:700;color:#2f7d4f;">'+money(s.documents_paid||0)+'</div></div>' +
-        '<div style="background:#f5f6f8;border-radius:8px;padding:12px;"><div class="muted">Pending (from docs)</div><div style="font-size:18px;font-weight:700;color:#d98c2b;">'+money(s.documents_pending||0)+'</div></div>' +
-        (s.documents_unclear ? '<div style="background:#f5f6f8;border-radius:8px;padding:12px;"><div class="muted">Unclear (from docs)</div><div style="font-size:18px;font-weight:700;color:#777;">'+money(s.documents_unclear)+'</div></div>' : '') +
+      html += '<h2 style="margin-top:18px;">From uploaded documents</h2><div class="row">' +
+        '<div class="stat-card"><div class="muted">Paid (from docs)</div><div class="stat-num" style="color:#2f7d4f;">'+money(s.documents_paid||0)+'</div></div>' +
+        '<div class="stat-card"><div class="muted">Pending (from docs)</div><div class="stat-num" style="color:#d98c2b;">'+money(s.documents_pending||0)+'</div></div>' +
+        (s.documents_unclear ? '<div class="stat-card"><div class="muted">Unclear (from docs)</div><div class="stat-num" style="color:#777;">'+money(s.documents_unclear)+'</div></div>' : '') +
         '</div><p class="muted" style="margin-top:6px;">These totals come from amounts detected in uploaded documents — separate from recorded transactions above.</p>';
     }
     el.innerHTML = html;
+    cards.forEach((c,i) => animateCount(document.getElementById('statNum'+i), c.amt));
   } catch(e) { el.textContent = 'Could not load summary.'; }
 }
 async function loadWeeklyWages(){
