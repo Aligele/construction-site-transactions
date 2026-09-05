@@ -813,9 +813,17 @@ async function loadSummary(){
       {label:'Paid', amt:s.paid, count:s.paid_count, color:'#2f7d4f'},
       {label:'Rejected', amt:s.rejected, count:s.rejected_count, color:'#b03a3a'}
     ];
-    el.innerHTML = '<div class="row">' + cards.map(c =>
+    let html = '<div class="row">' + cards.map(c =>
       '<div style="background:#f5f6f8;border-radius:8px;padding:12px;"><div class="muted">'+c.label+' ('+c.count+')</div><div style="font-size:18px;font-weight:700;color:'+c.color+';">'+money(c.amt)+'</div></div>'
     ).join('') + '</div>';
+    if ((s.documents_paid||0) + (s.documents_pending||0) + (s.documents_unclear||0) > 0) {
+      html += '<h2 style="margin-top:18px;font-size:14px;">From uploaded documents</h2><div class="row">' +
+        '<div style="background:#f5f6f8;border-radius:8px;padding:12px;"><div class="muted">Paid (from docs)</div><div style="font-size:18px;font-weight:700;color:#2f7d4f;">'+money(s.documents_paid||0)+'</div></div>' +
+        '<div style="background:#f5f6f8;border-radius:8px;padding:12px;"><div class="muted">Pending (from docs)</div><div style="font-size:18px;font-weight:700;color:#d98c2b;">'+money(s.documents_pending||0)+'</div></div>' +
+        (s.documents_unclear ? '<div style="background:#f5f6f8;border-radius:8px;padding:12px;"><div class="muted">Unclear (from docs)</div><div style="font-size:18px;font-weight:700;color:#777;">'+money(s.documents_unclear)+'</div></div>' : '') +
+        '</div><p class="muted" style="margin-top:6px;">These totals come from amounts detected in uploaded documents — separate from recorded transactions above.</p>';
+    }
+    el.innerHTML = html;
   } catch(e) { el.textContent = 'Could not load summary.'; }
 }
 async function loadWeeklyWages(){
@@ -879,7 +887,7 @@ async function loadDocuments(){
         '<div class="topbar"><strong>'+d.file_name+'</strong>'+statusBadge+'</div>' +
         (d.description?'<div class="muted">'+d.description+'</div>':'') +
         '<div class="muted" style="margin:6px 0;">Uploaded by '+uploaderLine+' on '+new Date(d.created_at).toLocaleDateString()+'</div>' +
-        (d.extracted_text?'<div style="background:#f5f6f8;border-radius:6px;padding:8px;font-size:13px;margin:6px 0;">'+d.extracted_text+'</div>':'') +
+        (d.extracted_text?'<div style="background:#f5f6f8;border-radius:6px;padding:8px;font-size:13px;margin:6px 0;">'+d.extracted_text+(d.extracted_amount?'<div style="margin-top:6px;font-weight:600;">Amount: '+money(d.extracted_amount)+' — '+(d.extracted_payment_status||'unclear')+'</div>':'')+'</div>':'') +
         '<div class="actions">'+(d.download_url?'<a href="'+d.download_url+'" target="_blank"><button class="secondary">Download</button></a>':'')+(canDelete?' <button class="danger" data-del-doc="'+d.id+'">Delete</button>':'')+'</div>' +
       '</div>';
     }).join('');
@@ -1143,6 +1151,20 @@ app.get('/api/summary', requireAuth, async (req, res) => {
     if (summary[t.status] !== undefined) { summary[t.status] += amt; summary[t.status + '_count']++; }
     summary.by_category[t.category] = (summary.by_category[t.category] || 0) + amt;
   }
+
+  let docQuery = supabase.from('cst_documents').select('extracted_amount, extracted_payment_status').eq('extraction_status', 'done').not('extracted_amount', 'is', null);
+  if (req.user.role !== 'admin' && req.user.site_id) docQuery = docQuery.eq('site_id', req.user.site_id);
+  const { data: docs } = await docQuery;
+  summary.documents_paid = 0;
+  summary.documents_pending = 0;
+  summary.documents_unclear = 0;
+  for (const d of (docs || [])) {
+    const amt = Number(d.extracted_amount) || 0;
+    if (d.extracted_payment_status === 'paid') summary.documents_paid += amt;
+    else if (d.extracted_payment_status === 'pending') summary.documents_pending += amt;
+    else summary.documents_unclear += amt;
+  }
+
   res.json(summary);
 });
 
@@ -1800,7 +1822,7 @@ app.get('/api/forms/worker-registration.pdf', requireAuth, async (req, res) => {
 // ---------- Manual document uploads (photos/scans of offline forms, receipts, etc.) ----------
 // ---------- AI document extraction (OCR-style reading of uploaded forms/receipts) ----------
 async function extractDocumentInfo(buffer, mimetype) {
-  if (!process.env.ANTHROPIC_API_KEY) return { status: 'skipped', text: null };
+  if (!process.env.ANTHROPIC_API_KEY) return { status: 'skipped', text: null, amount: null, payment_status: null };
   try {
     const base64 = buffer.toString('base64');
     const isPdf = mimetype === 'application/pdf';
@@ -1817,22 +1839,39 @@ async function extractDocumentInfo(buffer, mimetype) {
       },
       body: JSON.stringify({
         model: 'claude-sonnet-5',
-        max_tokens: 600,
+        max_tokens: 700,
         messages: [{
           role: 'user',
           content: [
             contentBlock,
-            { type: 'text', text: 'This is a photo or scan of a construction site record — it may be a handwritten transaction log, a receipt, or an invoice. Extract every transaction line you can read: date, category (materials/labor/equipment/fuel/other), description, and amount (KES). Also note any worker names, vendor names, site name, or other relevant details. Write a concise plain-text summary suitable for a notification to a manager and finance officer. If the document is unreadable or contains no relevant financial information, say so plainly in one sentence.' }
+            { type: 'text', text: 'This is a photo or scan of a construction site record — it may be a handwritten transaction log, a receipt, or an invoice. ' +
+              'Read every transaction line you can find: date, category (materials/labor/equipment/fuel/other), description, and amount (KES). Also note any worker names, vendor names, site name, or other relevant details.\n\n' +
+              'Respond with ONLY a JSON object (no markdown fences, no extra text) in exactly this shape:\n' +
+              '{"summary": "<concise plain-text summary of what the document shows, suitable for a notification to a manager and finance officer, or a one-sentence note if unreadable>", ' +
+              '"total_amount": <sum of every monetary amount found in the document as a plain number, or null if none found>, ' +
+              '"payment_status": "<one of: paid, pending, unclear — paid if the document is a receipt/proof that money already changed hands, pending if it is an invoice/bill/unpaid claim, unclear if you cannot tell>"}' }
           ]
         }]
       })
     });
     const data = await r.json();
-    if (!r.ok) return { status: 'failed', text: data.error?.message || 'Extraction failed' };
-    const text = (data.content || []).filter(c => c.type === 'text').map(c => c.text).join('\n').trim();
-    return { status: 'done', text: text || 'No readable content found.' };
+    if (!r.ok) return { status: 'failed', text: data.error?.message || 'Extraction failed', amount: null, payment_status: null };
+    const raw = (data.content || []).filter(c => c.type === 'text').map(c => c.text).join('\n').trim();
+    try {
+      const cleaned = raw.replace(/^```json\s*|```$/g, '').trim();
+      const parsed = JSON.parse(cleaned);
+      return {
+        status: 'done',
+        text: parsed.summary || 'No readable content found.',
+        amount: typeof parsed.total_amount === 'number' ? parsed.total_amount : null,
+        payment_status: ['paid', 'pending', 'unclear'].includes(parsed.payment_status) ? parsed.payment_status : 'unclear'
+      };
+    } catch {
+      // Fell back to plain text if the model didn't return valid JSON — still useful, just no structured totals.
+      return { status: 'done', text: raw || 'No readable content found.', amount: null, payment_status: 'unclear' };
+    }
   } catch (e) {
-    return { status: 'failed', text: e.message };
+    return { status: 'failed', text: e.message, amount: null, payment_status: null };
   }
 }
 
@@ -1859,16 +1898,18 @@ app.post('/api/documents', requireAuth, upload.single('file'), async (req, res) 
   // serverless functions don't reliably continue work after the response has been sent.
   const extraction = await extractDocumentInfo(req.file.buffer, req.file.mimetype);
   await supabase.from('cst_documents').update({
-    extracted_text: extraction.text, extraction_status: extraction.status
+    extracted_text: extraction.text, extraction_status: extraction.status,
+    extracted_amount: extraction.amount, extracted_payment_status: extraction.payment_status
   }).eq('id', data.id);
 
   if (extraction.status === 'done') {
     const { data: recipients } = await supabase.from('cst_users').select('id').eq('site_id', site_id).in('role', ['manager', 'finance']);
-    const msg = `Document uploaded: "${req.file.originalname}". Extracted: ${extraction.text.slice(0, 400)}`;
+    const amountNote = extraction.amount ? ` Amount: KES ${extraction.amount.toLocaleString()} (${extraction.payment_status}).` : '';
+    const msg = `Document uploaded: "${req.file.originalname}". Extracted: ${extraction.text.slice(0, 400)}${amountNote}`;
     for (const r of (recipients || [])) await notify(r.id, null, 'batch_submitted', msg);
   }
 
-  res.status(201).json({ ...data, extracted_text: extraction.text, extraction_status: extraction.status });
+  res.status(201).json({ ...data, extracted_text: extraction.text, extraction_status: extraction.status, extracted_amount: extraction.amount, extracted_payment_status: extraction.payment_status });
 });
 
 app.get('/api/documents', requireAuth, async (req, res) => {
