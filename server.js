@@ -378,7 +378,7 @@ function buildStoreHtml(user){
   if (canManage) {
     html += '<div class="card"><h2>Add a material</h2><div class="row"><div><label>Material name</label><input id="item_name" placeholder="e.g. Cement (50kg bags)" /></div><div><label>Unit</label><input id="item_unit" placeholder="e.g. bags, liters, pieces" /></div></div><div class="row"><div><label>Initial quantity</label><input id="item_qty" type="number" step="0.01" placeholder="0" /></div><div><label>Reorder level (alert below this)</label><input id="item_reorder" type="number" step="0.01" placeholder="optional" /></div></div><div style="margin-top:12px;"><button id="addItemMaterialBtn">Add material</button></div><div class="error" id="addItemErr"></div></div>';
   }
-  html += '<div class="card"><h2>Material stock</h2><div id="storeList" class="muted">Loading...</div></div>';
+  html += '<div class="card"><div class="topbar"><h2>Material stock</h2><button class="success" id="downloadStockPdfBtn">Download PDF report</button></div><div id="storeList" class="muted">Loading...</div></div>';
   return html;
 }
 
@@ -441,6 +441,14 @@ async function renderDashboard(){
     if (document.getElementById('notifList')) loadNotifications();
     if (document.getElementById('userList')) loadUsers();
     if (document.getElementById('storeList')) loadStoreItems();
+    if (document.getElementById('downloadStockPdfBtn')) {
+      document.getElementById('downloadStockPdfBtn').onclick = () => {
+        fetch(API+'/store/report.pdf', {headers:{Authorization:'Bearer '+state.token}}).then(r=>r.blob()).then(blob=>{
+          const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href=url;
+          a.download = 'stock-report.pdf'; a.click();
+        });
+      };
+    }
     if (document.getElementById('addItemMaterialBtn')) {
       document.getElementById('addItemMaterialBtn').onclick = async () => {
         const name = document.getElementById('item_name').value.trim();
@@ -1997,11 +2005,11 @@ app.delete('/api/documents/:id', requireAuth, requireRole('manager', 'admin'), a
 });
 
 // ---------- Store / material inventory ----------
-app.get('/api/store/items', requireAuth, async (req, res) => {
+async function getStoreItemsWithTotals(req) {
   let query = supabase.from('cst_store_items').select('*').order('name');
   if (req.user.role !== 'admin') query = query.eq('site_id', req.user.site_id);
   const { data, error } = await query;
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) throw new Error(error.message);
 
   let movQuery = supabase.from('cst_store_movements').select('item_id, movement_type, quantity');
   if (req.user.role !== 'admin') movQuery = movQuery.eq('site_id', req.user.site_id);
@@ -2013,12 +2021,73 @@ app.get('/api/store/items', requireAuth, async (req, res) => {
     totals[m.item_id][m.movement_type === 'in' ? 'total_in' : 'total_out'] += Number(m.quantity);
   }
 
-  const withTotals = data.map(i => ({
+  return data.map(i => ({
     ...i,
     total_in: totals[i.id]?.total_in || 0,
     total_out: totals[i.id]?.total_out || 0
   }));
-  res.json(withTotals);
+}
+
+app.get('/api/store/items', requireAuth, async (req, res) => {
+  try {
+    const withTotals = await getStoreItemsWithTotals(req);
+    res.json(withTotals);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/store/report.pdf', requireAuth, async (req, res) => {
+  try {
+    const items = await getStoreItemsWithTotals(req);
+    const doc = new PDFDocument({ margin: 40, size: 'A4' });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'attachment; filename="stock-report.pdf"');
+    doc.pipe(res);
+
+    drawFormHeader(doc, 'Material Stock Report', 'Construction Portal');
+    const infoBottom = drawInfoBox(doc, 130, [
+      'Generated: ' + new Date().toLocaleString(),
+      'Total materials tracked: ' + items.length
+    ]);
+
+    if (!items.length) {
+      doc.font('Helvetica').fontSize(11).fillColor('#555').text('No materials are being tracked yet.', PDF_LEFT, infoBottom + 20);
+    } else {
+      const rowsPerPage = 22;
+      let idx = 0;
+      let startY = infoBottom + 16;
+      while (idx < items.length) {
+        const pageItems = items.slice(idx, idx + rowsPerPage);
+        const tableBottom = drawGridTable(doc, {
+          startY,
+          columns: [
+            { label: 'Material', width: 165 },
+            { label: 'Stock In', width: 90 },
+            { label: 'Stock Out', width: 90 },
+            { label: 'Remaining', width: 100 },
+            { label: 'Reorder At', width: 70 }
+          ],
+          headerHeight: 22,
+          rowHeight: 20,
+          numRows: pageItems.length
+        });
+        doc.font('Helvetica').fontSize(9).fillColor('#222');
+        pageItems.forEach((it, i) => {
+          const rowY = startY + 22 + i * 20 + 5;
+          doc.text(it.name, PDF_LEFT + 6, rowY, { width: 155 });
+          doc.text(`${it.total_in} ${it.unit}`, PDF_LEFT + 171, rowY, { width: 84 });
+          doc.text(`${it.total_out} ${it.unit}`, PDF_LEFT + 261, rowY, { width: 84 });
+          doc.text(`${it.quantity_in_stock} ${it.unit}`, PDF_LEFT + 351, rowY, { width: 94 });
+          doc.text(it.reorder_level ? String(it.reorder_level) : '—', PDF_LEFT + 451, rowY, { width: 64 });
+        });
+        idx += rowsPerPage;
+        if (idx < items.length) { doc.addPage(); startY = 40; }
+        else startY = tableBottom;
+      }
+      drawFormFooter(doc, startY + 20, 'Generated automatically from live stock records — reorder levels are highlighted in the app when stock runs low.');
+    }
+
+    doc.end();
+  } catch (e) { res.status(500).send('Could not generate report: ' + e.message); }
 });
 
 app.post('/api/store/items', requireAuth, requireRole('storekeeper', 'manager', 'admin'), async (req, res) => {
