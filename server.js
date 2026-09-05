@@ -4,6 +4,9 @@ const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
+const PDFDocument = require('pdfkit');
+const multer = require('multer');
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
 const ExcelJS = require('exceljs');
 const { createClient } = require('@supabase/supabase-js');
 
@@ -264,12 +267,14 @@ function buildOverviewHtml(user){
 }
 function buildTransactionsHtml(user){
   let html = '';
+  html += '<div class="card"><h2>Offline form</h2><p class="muted">No network on site? Download a blank printable form, fill it by hand, and enter it into the app (or upload a photo below) once you\\'re back online.</p><button class="secondary" id="downloadFormBtn">Download blank form (PDF)</button></div>';
   if (user.role==='clerk' || user.role==='admin') {
     html += '<div class="card"><h2>Log transactions</h2><p class="muted">Add materials, labor, fuel, etc. as separate line items, then submit them together — the total goes to your manager and finance in one notification.</p><div class="row"><div><label>Site ID</label><input id="site_id" placeholder="site UUID" value="'+(user.site_id||'')+'" /></div></div><div id="itemRows"></div><div style="margin-top:8px;"><button class="secondary" id="addItemBtn" type="button">+ Add item</button></div><div class="topbar" style="margin-top:14px;"><strong>Total: <span id="batchTotal">KES 0.00</span></strong><button id="submitBatch">Submit all</button></div><div class="error" id="submitErr"></div></div>';
   }
   html += '<div class="card"><div class="topbar"><h2>Transactions</h2><div>'+(['manager','finance','admin'].includes(user.role)?'<button id="exportBtn" class="secondary">Download Excel</button>':'')+(['manager','admin'].includes(user.role)?' <button id="clearAllBtn" class="danger">Clear all data</button>':'')+'</div></div>' +
     '<div class="row" style="margin-top:6px;"><input id="filterSearch" placeholder="Search description..." /><select id="filterStatus"><option value="">All statuses</option><option value="pending">Pending</option><option value="approved">Approved</option><option value="paid">Paid</option><option value="rejected">Rejected</option></select><input id="filterFrom" type="date" /><input id="filterTo" type="date" /><button class="secondary" id="filterApply">Filter</button></div>' +
     '<div id="table"></div><div id="pagination" class="row" style="margin-top:10px;justify-content:flex-end;"></div></div>';
+  html += '<div class="card"><h2>Documents</h2><p class="muted">Upload photos or scans of filled forms, receipts, or other paper records.</p><div class="row"><input id="docFile" type="file" accept="image/*,.pdf" /><input id="docDesc" placeholder="Short description (optional)" /></div><div style="margin-top:10px;"><button id="uploadDocBtn">Upload</button></div><div class="error" id="docErr"></div><div id="docList" class="muted" style="margin-top:12px;">Loading...</div></div>';
   return html;
 }
 function buildRegistryHtml(user){
@@ -536,6 +541,32 @@ async function renderDashboard(){
         });
       };
     }
+    if (document.getElementById('downloadFormBtn')) {
+      document.getElementById('downloadFormBtn').onclick = () => {
+        fetch(API+'/forms/transaction-log.pdf', {headers:{Authorization:'Bearer '+state.token}}).then(r=>r.blob()).then(blob=>{
+          const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href=url;
+          a.download = 'site-transaction-log-form.pdf'; a.click();
+        });
+      };
+    }
+    if (document.getElementById('docList')) {
+      loadDocuments();
+      document.getElementById('uploadDocBtn').onclick = async () => {
+        const fileInput = document.getElementById('docFile');
+        const description = document.getElementById('docDesc').value.trim();
+        if (!fileInput.files.length) { document.getElementById('docErr').textContent = 'Choose a file first.'; return; }
+        const formData = new FormData();
+        formData.append('file', fileInput.files[0]);
+        formData.append('description', description);
+        try {
+          const res = await fetch(API+'/documents', { method:'POST', headers:{Authorization:'Bearer '+state.token}, body: formData });
+          if (!res.ok) { const b = await res.json().catch(()=>({})); throw new Error(b.error||'Upload failed'); }
+          document.getElementById('docErr').textContent = '';
+          fileInput.value=''; document.getElementById('docDesc').value='';
+          loadDocuments();
+        } catch(e) { document.getElementById('docErr').textContent = e.message; }
+      };
+    }
     if (document.getElementById('clearAllBtn')) {
       document.getElementById('clearAllBtn').onclick = async () => {
         if (!confirm('This will permanently delete ALL transaction data for your site. Are you sure?')) return;
@@ -749,6 +780,24 @@ async function loadWorkerAttendance(){
       };
     });
   } catch(e) { el.textContent = 'Could not load workers.'; }
+}
+async function loadDocuments(){
+  const el = document.getElementById('docList');
+  const canDelete = ['manager','admin'].includes(state.user.role);
+  try {
+    const docs = await api('/documents');
+    if (!docs.length) { el.textContent = 'No documents uploaded yet.'; return; }
+    el.innerHTML = '<table><thead><tr><th>File</th><th>Description</th><th>Uploaded</th><th>Actions</th></tr></thead><tbody>' +
+      docs.map(d => '<tr><td>'+d.file_name+'</td><td>'+(d.description||'')+'</td><td>'+new Date(d.created_at).toLocaleDateString()+'</td><td class="actions">'+(d.download_url?'<a href="'+d.download_url+'" target="_blank"><button class="secondary">Download</button></a>':'')+(canDelete?' <button class="danger" data-del-doc="'+d.id+'">Delete</button>':'')+'</td></tr>').join('') +
+      '</tbody></table>';
+    el.querySelectorAll('[data-del-doc]').forEach(btn => {
+      btn.onclick = async () => {
+        if (!confirm('Delete this document?')) return;
+        try { await api('/documents/'+btn.dataset.delDoc, {method:'DELETE'}); loadDocuments(); }
+        catch(e){ alert(e.message); }
+      };
+    });
+  } catch(e) { el.textContent = 'Could not load documents.'; }
 }
 async function loadUsers(){
   const el = document.getElementById('userList');
@@ -1580,6 +1629,101 @@ app.post('/api/mpesa/b2c/result', express.json(), async (req, res) => {
 app.post('/api/mpesa/b2c/timeout', express.json(), (req, res) => {
   console.error('M-Pesa B2C request timed out:', JSON.stringify(req.body));
   res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
+});
+
+// ---------- Printable blank transaction form (for offline/no-network use) ----------
+app.get('/api/forms/transaction-log.pdf', requireAuth, async (req, res) => {
+  const doc = new PDFDocument({ margin: 40, size: 'A4' });
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', 'attachment; filename="site-transaction-log-form.pdf"');
+  doc.pipe(res);
+
+  // Logo badge (simple truck mark drawn with vectors, matching the app's brand)
+  const forest = '#0f2818';
+  doc.roundedRect(40, 40, 40, 40, 8).fillAndStroke('#eaf7ee', forest);
+  doc.rect(48, 55, 18, 12).fill(forest);
+  doc.circle(54, 70, 3).fill(forest);
+  doc.circle(66, 70, 3).fill(forest);
+
+  doc.fillColor(forest).fontSize(20).font('Helvetica-Bold').text('Site Transactions', 90, 45);
+  doc.fontSize(10).font('Helvetica').fillColor('#555').text('Construction Portal — Manual Transaction Log', 90, 68);
+
+  doc.moveDown(2);
+  doc.fontSize(9).fillColor('#333');
+  doc.text('Site name / ID: ______________________________        Date: ______________', 40, 110);
+  doc.text('Clerk name: ______________________________        Signature: ______________', 40, 128);
+
+  doc.moveDown(2);
+  const tableTop = 165;
+  const colX = { date: 40, cat: 100, desc: 170, amount: 460 };
+  doc.font('Helvetica-Bold').fontSize(9);
+  doc.text('Date', colX.date, tableTop);
+  doc.text('Category', colX.cat, tableTop);
+  doc.text('Description', colX.desc, tableTop);
+  doc.text('Amount (KES)', colX.amount, tableTop);
+  doc.moveTo(40, tableTop + 14).lineTo(555, tableTop + 14).stroke();
+
+  doc.font('Helvetica').fontSize(9);
+  let y = tableTop + 22;
+  for (let i = 0; i < 22; i++) {
+    doc.moveTo(40, y + 16).lineTo(555, y + 16).strokeColor('#ddd').stroke();
+    y += 20;
+  }
+
+  doc.moveTo(40, y + 10).lineTo(555, y + 10).strokeColor('#000').stroke();
+  doc.font('Helvetica-Bold').text('TOTAL', colX.desc, y + 16);
+  doc.text('KES ____________________', colX.amount, y + 16);
+
+  doc.font('Helvetica').fontSize(8).fillColor('#777').text(
+    'Fill this out by hand when there is no network connection. Once back online, submit these entries in the app and upload a photo of this sheet under "Documents" for the record.',
+    40, y + 45, { width: 515 }
+  );
+
+  doc.end();
+});
+
+// ---------- Manual document uploads (photos/scans of offline forms, receipts, etc.) ----------
+app.post('/api/documents', requireAuth, upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  const site_id = req.user.site_id;
+  if (!site_id) return res.status(400).json({ error: 'Your account has no site associated with it' });
+
+  const safeName = req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const storagePath = `${site_id}/${Date.now()}-${safeName}`;
+
+  const { error: upErr } = await supabase.storage.from('site-documents').upload(storagePath, req.file.buffer, {
+    contentType: req.file.mimetype
+  });
+  if (upErr) return res.status(500).json({ error: upErr.message });
+
+  const { data, error } = await supabase.from('cst_documents').insert({
+    site_id, uploaded_by: req.user.id, file_name: req.file.originalname, storage_path: storagePath,
+    description: req.body.description || null, transaction_id: req.body.transaction_id || null
+  }).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.status(201).json(data);
+});
+
+app.get('/api/documents', requireAuth, async (req, res) => {
+  let query = supabase.from('cst_documents').select('*').order('created_at', { ascending: false });
+  if (req.user.role !== 'admin') query = query.eq('site_id', req.user.site_id);
+  const { data, error } = await query;
+  if (error) return res.status(500).json({ error: error.message });
+
+  const withUrls = await Promise.all(data.map(async d => {
+    const { data: signed } = await supabase.storage.from('site-documents').createSignedUrl(d.storage_path, 3600);
+    return { ...d, download_url: signed ? signed.signedUrl : null };
+  }));
+  res.json(withUrls);
+});
+
+app.delete('/api/documents/:id', requireAuth, requireRole('manager', 'admin'), async (req, res) => {
+  const { data: doc, error: fe } = await supabase.from('cst_documents').select('storage_path').eq('id', req.params.id).single();
+  if (fe || !doc) return res.status(404).json({ error: 'Document not found' });
+  await supabase.storage.from('site-documents').remove([doc.storage_path]);
+  const { error } = await supabase.from('cst_documents').delete().eq('id', req.params.id);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
 });
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
