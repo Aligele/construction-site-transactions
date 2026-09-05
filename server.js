@@ -558,6 +558,8 @@ async function renderDashboard(){
         const formData = new FormData();
         formData.append('file', fileInput.files[0]);
         formData.append('description', description);
+        const btn = document.getElementById('uploadDocBtn');
+        btn.disabled = true; btn.textContent = 'Uploading & reading document...';
         try {
           const res = await fetch(API+'/documents', { method:'POST', headers:{Authorization:'Bearer '+state.token}, body: formData });
           if (!res.ok) { const b = await res.json().catch(()=>({})); throw new Error(b.error||'Upload failed'); }
@@ -565,6 +567,7 @@ async function renderDashboard(){
           fileInput.value=''; document.getElementById('docDesc').value='';
           loadDocuments();
         } catch(e) { document.getElementById('docErr').textContent = e.message; }
+        finally { btn.disabled = false; btn.textContent = 'Upload'; }
       };
     }
     if (document.getElementById('clearAllBtn')) {
@@ -787,9 +790,16 @@ async function loadDocuments(){
   try {
     const docs = await api('/documents');
     if (!docs.length) { el.textContent = 'No documents uploaded yet.'; return; }
-    el.innerHTML = '<table><thead><tr><th>File</th><th>Description</th><th>Uploaded</th><th>Actions</th></tr></thead><tbody>' +
-      docs.map(d => '<tr><td>'+d.file_name+'</td><td>'+(d.description||'')+'</td><td>'+new Date(d.created_at).toLocaleDateString()+'</td><td class="actions">'+(d.download_url?'<a href="'+d.download_url+'" target="_blank"><button class="secondary">Download</button></a>':'')+(canDelete?' <button class="danger" data-del-doc="'+d.id+'">Delete</button>':'')+'</td></tr>').join('') +
-      '</tbody></table>';
+    el.innerHTML = docs.map(d => {
+      const statusBadge = d.extraction_status==='done' ? '<span class="badge paid">read</span>' : d.extraction_status==='failed' ? '<span class="badge rejected">unreadable</span>' : d.extraction_status==='skipped' ? '<span class="muted">not analyzed</span>' : '<span class="badge pending">analyzing</span>';
+      return '<div class="card" style="margin-bottom:10px;padding:14px;">' +
+        '<div class="topbar"><strong>'+d.file_name+'</strong>'+statusBadge+'</div>' +
+        (d.description?'<div class="muted">'+d.description+'</div>':'') +
+        '<div class="muted" style="margin:6px 0;">Uploaded '+new Date(d.created_at).toLocaleDateString()+'</div>' +
+        (d.extracted_text?'<div style="background:#f5f6f8;border-radius:6px;padding:8px;font-size:13px;margin:6px 0;">'+d.extracted_text+'</div>':'') +
+        '<div class="actions">'+(d.download_url?'<a href="'+d.download_url+'" target="_blank"><button class="secondary">Download</button></a>':'')+(canDelete?' <button class="danger" data-del-doc="'+d.id+'">Delete</button>':'')+'</div>' +
+      '</div>';
+    }).join('');
     el.querySelectorAll('[data-del-doc]').forEach(btn => {
       btn.onclick = async () => {
         if (!confirm('Delete this document?')) return;
@@ -1683,6 +1693,44 @@ app.get('/api/forms/transaction-log.pdf', requireAuth, async (req, res) => {
 });
 
 // ---------- Manual document uploads (photos/scans of offline forms, receipts, etc.) ----------
+// ---------- AI document extraction (OCR-style reading of uploaded forms/receipts) ----------
+async function extractDocumentInfo(buffer, mimetype) {
+  if (!process.env.ANTHROPIC_API_KEY) return { status: 'skipped', text: null };
+  try {
+    const base64 = buffer.toString('base64');
+    const isPdf = mimetype === 'application/pdf';
+    const contentBlock = isPdf
+      ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } }
+      : { type: 'image', source: { type: 'base64', media_type: mimetype, data: base64 } };
+
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-5',
+        max_tokens: 600,
+        messages: [{
+          role: 'user',
+          content: [
+            contentBlock,
+            { type: 'text', text: 'This is a photo or scan of a construction site record — it may be a handwritten transaction log, a receipt, or an invoice. Extract every transaction line you can read: date, category (materials/labor/equipment/fuel/other), description, and amount (KES). Also note any worker names, vendor names, site name, or other relevant details. Write a concise plain-text summary suitable for a notification to a manager and finance officer. If the document is unreadable or contains no relevant financial information, say so plainly in one sentence.' }
+          ]
+        }]
+      })
+    });
+    const data = await r.json();
+    if (!r.ok) return { status: 'failed', text: data.error?.message || 'Extraction failed' };
+    const text = (data.content || []).filter(c => c.type === 'text').map(c => c.text).join('\n').trim();
+    return { status: 'done', text: text || 'No readable content found.' };
+  } catch (e) {
+    return { status: 'failed', text: e.message };
+  }
+}
+
 app.post('/api/documents', requireAuth, upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   const site_id = req.user.site_id;
@@ -1701,7 +1749,21 @@ app.post('/api/documents', requireAuth, upload.single('file'), async (req, res) 
     description: req.body.description || null, transaction_id: req.body.transaction_id || null
   }).select().single();
   if (error) return res.status(500).json({ error: error.message });
-  res.status(201).json(data);
+
+  // Extract content and notify manager/finance. Awaited (not fire-and-forget) since Vercel
+  // serverless functions don't reliably continue work after the response has been sent.
+  const extraction = await extractDocumentInfo(req.file.buffer, req.file.mimetype);
+  await supabase.from('cst_documents').update({
+    extracted_text: extraction.text, extraction_status: extraction.status
+  }).eq('id', data.id);
+
+  if (extraction.status === 'done') {
+    const { data: recipients } = await supabase.from('cst_users').select('id').eq('site_id', site_id).in('role', ['manager', 'finance']);
+    const msg = `Document uploaded: "${req.file.originalname}". Extracted: ${extraction.text.slice(0, 400)}`;
+    for (const r of (recipients || [])) await notify(r.id, null, 'batch_submitted', msg);
+  }
+
+  res.status(201).json({ ...data, extracted_text: extraction.text, extraction_status: extraction.status });
 });
 
 app.get('/api/documents', requireAuth, async (req, res) => {
