@@ -2006,7 +2006,7 @@ app.get('/api/forms/worker-registration.pdf', requireAuth, async (req, res) => {
     ],
     headerHeight: 22,
     rowHeight: 24,
-    numRows: 18
+    numRows: 20
   });
 
   drawFormFooter(doc, tableBottom + 20,
