@@ -259,7 +259,8 @@ function renderLogin(){
   };
 }
 function buildOverviewHtml(user){
-  return '<div class="card"><h2>Overview</h2><div id="summaryBox" class="muted">Loading...</div></div>';
+  const canExport = ['manager','finance','admin'].includes(user.role);
+  return '<div class="card"><div class="topbar"><h2>Overview</h2>'+(canExport?'<button class="success" id="overviewExportBtn">Download Excel</button>':'')+'</div><div id="summaryBox" class="muted">Loading...</div></div>';
 }
 function buildTransactionsHtml(user){
   let html = '';
@@ -524,6 +525,14 @@ async function renderDashboard(){
         fetch(API+'/export', {headers:{Authorization:'Bearer '+state.token}}).then(r=>r.blob()).then(blob=>{
           const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href=url;
           a.download = 'site-transactions-'+new Date().toISOString().slice(0,10)+'.xlsx'; a.click();
+        });
+      };
+    }
+    if (document.getElementById('overviewExportBtn')) {
+      document.getElementById('overviewExportBtn').onclick = () => {
+        fetch(API+'/export', {headers:{Authorization:'Bearer '+state.token}}).then(r=>r.blob()).then(blob=>{
+          const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href=url;
+          a.download = 'overview-'+new Date().toISOString().slice(0,10)+'.xlsx'; a.click();
         });
       };
     }
