@@ -279,8 +279,10 @@ function buildTransactionsHtml(user){
 }
 function buildRegistryHtml(user){
   let html = '';
-  if (user.role==='clerk' || user.role==='admin') {
+  if (user.role==='clerk' || user.role==='manager' || user.role==='admin') {
     html += '<div class="card"><h2>Enroll a worker</h2><div class="row"><div><label>Full name</label><input id="w_name" placeholder="Full name" /></div><div><label>ID number</label><input id="w_id" placeholder="National ID number" /></div></div><div class="row"><div><label>Phone number</label><input id="w_phone" placeholder="07xxxxxxxx" /></div><div><label>Designation</label><input id="w_designation" placeholder="e.g. Mason, Fundi, Laborer" /></div><div><label>Daily rate (KES)</label><input id="w_rate" type="number" step="0.01" placeholder="e.g. 800" /></div></div><div style="margin-top:12px;"><button id="enrollWorkerBtn">Enroll worker</button></div><div class="error" id="enrollWorkerErr"></div></div>';
+  }
+  if (user.role==='clerk' || user.role==='admin') {
     html += '<div class="card"><div class="topbar"><h2>Daily attendance</h2><input id="attDate" type="date" /></div><div id="workerAttendance" class="muted">Loading workers...</div><div style="margin-top:12px;"><button id="submitAttendance">Submit today\\'s attendance</button></div><div class="error" id="attendanceErr"></div><div id="attendanceOk" class="muted"></div></div>';
   }
   if (user.role==='manager' || user.role==='finance') {
@@ -428,7 +430,8 @@ async function renderDashboard(){
           await api('/workers', {method:'POST', body: JSON.stringify({name, id_number, phone_number, designation, daily_rate})});
           document.getElementById('enrollWorkerErr').textContent = '';
           document.getElementById('w_name').value=''; document.getElementById('w_id').value=''; document.getElementById('w_phone').value=''; document.getElementById('w_designation').value=''; document.getElementById('w_rate').value='';
-          loadWorkerAttendance();
+          if (document.getElementById('attDate')) loadWorkerAttendance();
+          if (document.getElementById('attViewDate')) loadWorkerAttendanceView();
         } catch(e) { document.getElementById('enrollWorkerErr').textContent = e.message; }
       };
     }
@@ -1429,7 +1432,7 @@ app.delete('/api/transaction-vendors/:linkId', requireAuth, requireRole('manager
 });
 
 // ---------- Worker registry & daily attendance ----------
-app.post('/api/workers', requireAuth, requireRole('clerk', 'admin'), async (req, res) => {
+app.post('/api/workers', requireAuth, requireRole('clerk', 'manager', 'admin'), async (req, res) => {
   const { name, id_number, phone_number, designation, daily_rate } = req.body;
   if (!name || !id_number || !designation) return res.status(400).json({ error: 'name, id_number and designation are required' });
   const site_id = req.user.site_id;
