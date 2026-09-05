@@ -935,10 +935,10 @@ async function loadStoreItems(){
   try {
     const items = await api('/store/items');
     if (!items.length) { el.textContent = 'No materials tracked yet.'; return; }
-    el.innerHTML = '<table><thead><tr><th>Material</th><th>In stock</th><th>Reorder at</th><th>Actions</th></tr></thead><tbody>' +
+    el.innerHTML = '<table><thead><tr><th>Material</th><th>Stock In</th><th>Stock Out</th><th>Remaining</th><th>Reorder at</th><th>Actions</th></tr></thead><tbody>' +
       items.map(i => {
         const low = i.reorder_level && Number(i.quantity_in_stock) <= Number(i.reorder_level);
-        return '<tr><td>'+i.name+'</td><td>'+(low?'<span class="badge rejected">':'')+i.quantity_in_stock+' '+i.unit+(low?'</span>':'')+'</td><td>'+(i.reorder_level||'—')+'</td>' +
+        return '<tr><td>'+i.name+'</td><td>'+i.total_in+' '+i.unit+'</td><td>'+i.total_out+' '+i.unit+'</td><td>'+(low?'<span class="badge rejected">':'<strong>')+i.quantity_in_stock+' '+i.unit+(low?'</span>':'</strong>')+'</td><td>'+(i.reorder_level||'—')+'</td>' +
           '<td class="actions">'+(canManage?'<button class="success" data-move-in="'+i.id+'">Stock in</button> <button class="danger" data-move-out="'+i.id+'">Stock out</button>':'')+(canDelete?' <button class="secondary" data-del-item="'+i.id+'">Remove</button>':'')+'</td></tr>';
       }).join('') +
       '</tbody></table>';
@@ -2002,7 +2002,23 @@ app.get('/api/store/items', requireAuth, async (req, res) => {
   if (req.user.role !== 'admin') query = query.eq('site_id', req.user.site_id);
   const { data, error } = await query;
   if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
+
+  let movQuery = supabase.from('cst_store_movements').select('item_id, movement_type, quantity');
+  if (req.user.role !== 'admin') movQuery = movQuery.eq('site_id', req.user.site_id);
+  const { data: movements } = await movQuery;
+
+  const totals = {};
+  for (const m of (movements || [])) {
+    if (!totals[m.item_id]) totals[m.item_id] = { total_in: 0, total_out: 0 };
+    totals[m.item_id][m.movement_type === 'in' ? 'total_in' : 'total_out'] += Number(m.quantity);
+  }
+
+  const withTotals = data.map(i => ({
+    ...i,
+    total_in: totals[i.id]?.total_in || 0,
+    total_out: totals[i.id]?.total_out || 0
+  }));
+  res.json(withTotals);
 });
 
 app.post('/api/store/items', requireAuth, requireRole('storekeeper', 'manager', 'admin'), async (req, res) => {
