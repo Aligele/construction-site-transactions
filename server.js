@@ -7,6 +7,72 @@ const crypto = require('crypto');
 const PDFDocument = require('pdfkit');
 const multer = require('multer');
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
+
+// ---------- Shared PDF form styling helpers ----------
+const PDF_FOREST = '#0f2818';
+const PDF_MOSS = '#7ab98a';
+const PDF_LEFT = 40, PDF_RIGHT = 555;
+
+function drawFormHeader(doc, title, subtitle) {
+  // Logo badge (truck mark drawn with vectors, matching the app's brand)
+  doc.roundedRect(PDF_LEFT, 40, 44, 44, 8).fillAndStroke('#eaf7ee', PDF_FOREST);
+  doc.rect(PDF_LEFT + 9, 57, 20, 13).fill(PDF_FOREST);
+  doc.circle(PDF_LEFT + 16, 74, 3.5).fill(PDF_FOREST);
+  doc.circle(PDF_LEFT + 29, 74, 3.5).fill(PDF_FOREST);
+
+  doc.fillColor(PDF_FOREST).fontSize(20).font('Helvetica-Bold').text('Site Transactions', PDF_LEFT + 56, 44);
+  doc.fontSize(10).font('Helvetica').fillColor('#555').text(subtitle, PDF_LEFT + 56, 68);
+
+  doc.moveTo(PDF_LEFT, 96).lineTo(PDF_RIGHT, 96).lineWidth(1.5).strokeColor(PDF_FOREST).stroke();
+  doc.lineWidth(1);
+
+  doc.fontSize(14).font('Helvetica-Bold').fillColor(PDF_FOREST).text(title, PDF_LEFT, 106);
+}
+
+function drawInfoBox(doc, y, fields) {
+  const boxHeight = fields.length * 20 + 12;
+  doc.roundedRect(PDF_LEFT, y, PDF_RIGHT - PDF_LEFT, boxHeight, 4).strokeColor('#ccc').stroke();
+  doc.font('Helvetica').fontSize(9).fillColor('#333');
+  fields.forEach((line, i) => doc.text(line, PDF_LEFT + 10, y + 8 + i * 20));
+  return y + boxHeight;
+}
+
+function drawGridTable(doc, { startY, columns, headerHeight = 22, rowHeight = 22, numRows }) {
+  const tableWidth = PDF_RIGHT - PDF_LEFT;
+  let colX = [PDF_LEFT];
+  columns.forEach(c => colX.push(colX[colX.length - 1] + c.width));
+  const tableBottom = startY + headerHeight + numRows * rowHeight;
+
+  // Header row background
+  doc.rect(PDF_LEFT, startY, tableWidth, headerHeight).fillAndStroke('#e2f1e8', PDF_FOREST);
+  doc.font('Helvetica-Bold').fontSize(9).fillColor(PDF_FOREST);
+  columns.forEach((c, i) => doc.text(c.label, colX[i] + 6, startY + 7, { width: c.width - 10 }));
+
+  // Outer border
+  doc.rect(PDF_LEFT, startY, tableWidth, tableBottom - startY).strokeColor(PDF_FOREST).lineWidth(1.2).stroke();
+  doc.lineWidth(1);
+
+  // Column dividers
+  colX.slice(1, -1).forEach(x => {
+    doc.moveTo(x, startY).lineTo(x, tableBottom).strokeColor('#bbb').stroke();
+  });
+
+  // Row dividers
+  for (let i = 1; i <= numRows; i++) {
+    const y = startY + headerHeight + i * rowHeight;
+    doc.moveTo(PDF_LEFT, y).lineTo(PDF_RIGHT, y).strokeColor('#ddd').stroke();
+  }
+  doc.moveTo(PDF_LEFT, startY + headerHeight).lineTo(PDF_RIGHT, startY + headerHeight).strokeColor(PDF_FOREST).lineWidth(1.2).stroke();
+  doc.lineWidth(1);
+
+  return tableBottom;
+}
+
+function drawFormFooter(doc, y, text) {
+  doc.moveTo(PDF_LEFT, y).lineTo(PDF_RIGHT, y).strokeColor('#ccc').stroke();
+  doc.font('Helvetica-Oblique').fontSize(8).fillColor('#777').text(text, PDF_LEFT, y + 10, { width: PDF_RIGHT - PDF_LEFT });
+}
+
 const ExcelJS = require('exceljs');
 const { createClient } = require('@supabase/supabase-js');
 
@@ -1660,45 +1726,32 @@ app.get('/api/forms/transaction-log.pdf', requireAuth, async (req, res) => {
   res.setHeader('Content-Disposition', 'attachment; filename="site-transaction-log-form.pdf"');
   doc.pipe(res);
 
-  // Logo badge (simple truck mark drawn with vectors, matching the app's brand)
-  const forest = '#0f2818';
-  doc.roundedRect(40, 40, 40, 40, 8).fillAndStroke('#eaf7ee', forest);
-  doc.rect(48, 55, 18, 12).fill(forest);
-  doc.circle(54, 70, 3).fill(forest);
-  doc.circle(66, 70, 3).fill(forest);
+  drawFormHeader(doc, 'Manual Transaction Log', 'Construction Portal');
 
-  doc.fillColor(forest).fontSize(20).font('Helvetica-Bold').text('Site Transactions', 90, 45);
-  doc.fontSize(10).font('Helvetica').fillColor('#555').text('Construction Portal — Manual Transaction Log', 90, 68);
+  const infoBottom = drawInfoBox(doc, 130, [
+    'Site name / ID:  ____________________________________________          Date:  ______________________',
+    'Clerk name:  ____________________________________________          Signature:  ______________________'
+  ]);
 
-  doc.moveDown(2);
-  doc.fontSize(9).fillColor('#333');
-  doc.text('Site name / ID: ______________________________        Date: ______________', 40, 110);
-  doc.text('Clerk name: ______________________________        Signature: ______________', 40, 128);
+  const tableBottom = drawGridTable(doc, {
+    startY: infoBottom + 16,
+    columns: [
+      { label: 'Date', width: 65 },
+      { label: 'Category', width: 80 },
+      { label: 'Description', width: 275 },
+      { label: 'Amount (KES)', width: 95 }
+    ],
+    headerHeight: 22,
+    rowHeight: 22,
+    numRows: 20
+  });
 
-  doc.moveDown(2);
-  const tableTop = 165;
-  const colX = { date: 40, cat: 100, desc: 170, amount: 460 };
-  doc.font('Helvetica-Bold').fontSize(9);
-  doc.text('Date', colX.date, tableTop);
-  doc.text('Category', colX.cat, tableTop);
-  doc.text('Description', colX.desc, tableTop);
-  doc.text('Amount (KES)', colX.amount, tableTop);
-  doc.moveTo(40, tableTop + 14).lineTo(555, tableTop + 14).stroke();
+  doc.font('Helvetica-Bold').fontSize(10).fillColor(PDF_FOREST)
+    .text('TOTAL', PDF_LEFT + 65 + 80, tableBottom + 10)
+    .text('KES ________________', PDF_LEFT + 65 + 80 + 275, tableBottom + 10);
 
-  doc.font('Helvetica').fontSize(9);
-  let y = tableTop + 22;
-  for (let i = 0; i < 22; i++) {
-    doc.moveTo(40, y + 16).lineTo(555, y + 16).strokeColor('#ddd').stroke();
-    y += 20;
-  }
-
-  doc.moveTo(40, y + 10).lineTo(555, y + 10).strokeColor('#000').stroke();
-  doc.font('Helvetica-Bold').text('TOTAL', colX.desc, y + 16);
-  doc.text('KES ____________________', colX.amount, y + 16);
-
-  doc.font('Helvetica').fontSize(8).fillColor('#777').text(
-    'Fill this out by hand when there is no network connection. Once back online, submit these entries in the app and upload a photo of this sheet under "Documents" for the record.',
-    40, y + 45, { width: 515 }
+  drawFormFooter(doc, tableBottom + 45,
+    'Fill this out by hand when there is no network connection. Once back online, submit these entries in the app and upload a photo of this sheet under "Documents" for the record.'
   );
 
   doc.end();
@@ -1710,38 +1763,29 @@ app.get('/api/forms/worker-registration.pdf', requireAuth, async (req, res) => {
   res.setHeader('Content-Disposition', 'attachment; filename="worker-registration-form.pdf"');
   doc.pipe(res);
 
-  const forest = '#0f2818';
-  doc.roundedRect(40, 40, 40, 40, 8).fillAndStroke('#eaf7ee', forest);
-  doc.rect(48, 55, 18, 12).fill(forest);
-  doc.circle(54, 70, 3).fill(forest);
-  doc.circle(66, 70, 3).fill(forest);
+  drawFormHeader(doc, 'Worker Registration Form', 'Construction Portal');
 
-  doc.fillColor(forest).fontSize(20).font('Helvetica-Bold').text('Site Transactions', 90, 45);
-  doc.fontSize(10).font('Helvetica').fillColor('#555').text('Construction Portal — Worker Registration Form', 90, 68);
+  const infoBottom = drawInfoBox(doc, 130, [
+    'Site name / ID:  ____________________________________________          Date:  ______________________',
+    'Recorded by:  ____________________________________________          Signature:  ______________________'
+  ]);
 
-  doc.fontSize(9).fillColor('#333');
-  doc.text('Site name / ID: ______________________________        Date: ______________', 40, 110);
-  doc.text('Recorded by: ______________________________        Signature: ______________', 40, 128);
+  const tableBottom = drawGridTable(doc, {
+    startY: infoBottom + 16,
+    columns: [
+      { label: 'Full Name', width: 135 },
+      { label: 'ID Number', width: 90 },
+      { label: 'Phone Number', width: 95 },
+      { label: 'Designation', width: 100 },
+      { label: 'Daily Rate', width: 95 }
+    ],
+    headerHeight: 22,
+    rowHeight: 24,
+    numRows: 18
+  });
 
-  const tableTop = 165;
-  const colX = { name: 40, id: 160, phone: 250, desig: 340, rate: 460 };
-  doc.font('Helvetica-Bold').fontSize(8);
-  doc.text('Full Name', colX.name, tableTop);
-  doc.text('ID Number', colX.id, tableTop);
-  doc.text('Phone Number', colX.phone, tableTop);
-  doc.text('Designation', colX.desig, tableTop);
-  doc.text('Daily Rate', colX.rate, tableTop);
-  doc.moveTo(40, tableTop + 12).lineTo(555, tableTop + 12).stroke();
-
-  let y = tableTop + 20;
-  for (let i = 0; i < 20; i++) {
-    doc.moveTo(40, y + 20).lineTo(555, y + 20).strokeColor('#ddd').stroke();
-    y += 24;
-  }
-
-  doc.font('Helvetica').fontSize(8).fillColor('#777').text(
-    'Fill this out by hand when there is no network connection. Once back online, enter each worker under "Enroll a worker" in the app, and upload a photo of this sheet under "Documents" for the record.',
-    40, y + 20, { width: 515 }
+  drawFormFooter(doc, tableBottom + 20,
+    'Fill this out by hand when there is no network connection. Once back online, enter each worker under "Enroll a worker" in the app, and upload a photo of this sheet under "Documents" for the record.'
   );
 
   doc.end();
