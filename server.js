@@ -258,6 +258,45 @@ function renderLogin(){
     } catch(e) { document.getElementById('err').textContent = e.message; }
   };
 }
+function buildOverviewHtml(user){
+  return '<div class="card"><h2>Overview</h2><div id="summaryBox" class="muted">Loading...</div></div>';
+}
+function buildTransactionsHtml(user){
+  let html = '';
+  if (user.role==='clerk' || user.role==='admin') {
+    html += '<div class="card"><h2>Log transactions</h2><p class="muted">Add materials, labor, fuel, etc. as separate line items, then submit them together — the total goes to your manager and finance in one notification.</p><div class="row"><div><label>Site ID</label><input id="site_id" placeholder="site UUID" value="'+(user.site_id||'')+'" /></div></div><div id="itemRows"></div><div style="margin-top:8px;"><button class="secondary" id="addItemBtn" type="button">+ Add item</button></div><div class="topbar" style="margin-top:14px;"><strong>Total: <span id="batchTotal">KES 0.00</span></strong><button id="submitBatch">Submit all</button></div><div class="error" id="submitErr"></div></div>';
+  }
+  html += '<div class="card"><div class="topbar"><h2>Transactions</h2><div>'+(['manager','finance','admin'].includes(user.role)?'<button id="exportBtn" class="secondary">Download Excel</button>':'')+(['manager','admin'].includes(user.role)?' <button id="clearAllBtn" class="danger">Clear all data</button>':'')+'</div></div>' +
+    '<div class="row" style="margin-top:6px;"><input id="filterSearch" placeholder="Search description..." /><select id="filterStatus"><option value="">All statuses</option><option value="pending">Pending</option><option value="approved">Approved</option><option value="paid">Paid</option><option value="rejected">Rejected</option></select><input id="filterFrom" type="date" /><input id="filterTo" type="date" /><button class="secondary" id="filterApply">Filter</button></div>' +
+    '<div id="table"></div><div id="pagination" class="row" style="margin-top:10px;justify-content:flex-end;"></div></div>';
+  return html;
+}
+function buildRegistryHtml(user){
+  let html = '';
+  if (user.role==='clerk' || user.role==='admin') {
+    html += '<div class="card"><h2>Enroll a worker</h2><div class="row"><div><label>Full name</label><input id="w_name" placeholder="Full name" /></div><div><label>ID number</label><input id="w_id" placeholder="National ID number" /></div></div><div class="row"><div><label>Phone number</label><input id="w_phone" placeholder="07xxxxxxxx" /></div><div><label>Designation</label><input id="w_designation" placeholder="e.g. Mason, Fundi, Laborer" /></div><div><label>Daily rate (KES)</label><input id="w_rate" type="number" step="0.01" placeholder="e.g. 800" /></div></div><div style="margin-top:12px;"><button id="enrollWorkerBtn">Enroll worker</button></div><div class="error" id="enrollWorkerErr"></div></div>';
+    html += '<div class="card"><div class="topbar"><h2>Daily attendance</h2><input id="attDate" type="date" /></div><div id="workerAttendance" class="muted">Loading workers...</div><div style="margin-top:12px;"><button id="submitAttendance">Submit today\\'s attendance</button></div><div class="error" id="attendanceErr"></div><div id="attendanceOk" class="muted"></div></div>';
+  }
+  if (user.role==='manager' || user.role==='finance') {
+    html += '<div class="card"><div class="topbar"><h2>Workers & attendance</h2><input id="attViewDate" type="date" /></div><div id="workerAttendanceView" class="muted">Loading...</div></div>';
+  }
+  if (user.role==='finance' || user.role==='manager' || user.role==='admin') {
+    html += '<div class="card"><div class="topbar"><h2>Weekly wages</h2><div><label style="display:inline;margin-right:6px;">Week starting</label><input id="wagesWeekStart" type="date" /></div></div><div id="weeklyWages" class="muted">Loading...</div><div style="margin-top:10px;text-align:left;">'+(['finance','admin'].includes(user.role)?'<button class="success" id="payAllWagesBtn">Pay all wages</button> ':'')+'<button class="success" id="downloadWagesBtn">Download Excel</button></div><div class="error" id="payWagesErr"></div><div class="muted" id="payWagesOk"></div></div>';
+  }
+  return html;
+}
+function buildNotificationsHtml(user){
+  return '<div class="card"><div class="topbar"><h2>Notifications</h2><span class="muted" id="notifCount"></span></div><div id="notifList" class="muted">Loading...</div></div>';
+}
+function buildSettingsHtml(user){
+  let html = '<div class="card"><h2>Change password</h2><div class="row"><div><label>Current password</label><input id="curPw" type="password" /></div><div><label>New password</label><input id="newPw" type="password" /></div></div><div style="margin-top:12px;"><button id="changePwBtn">Update password</button></div><div class="error" id="changePwErr"></div><div id="changePwOk" class="muted"></div></div>';
+  if (user.role==='manager' || user.role==='admin') {
+    html += '<div class="card"><h2>Add a clerk or finance login</h2><div class="row"><div><label>Full name</label><input id="new_name" placeholder="Full name" /></div><div><label>Email</label><input id="new_email" type="email" placeholder="person@example.com" /></div><div><label>Role</label><select id="new_role"><option value="clerk">Clerk</option><option value="finance">Finance</option></select></div></div><div style="margin-top:12px;"><button id="createUserBtn">Create login</button></div><div class="error" id="createUserErr"></div><div id="createUserResult"></div></div>';
+    html += '<div class="card"><h2>Team logins</h2><div id="userList" class="muted">Loading...</div></div>';
+  }
+  return html;
+}
+
 async function renderDashboard(){
   const {user} = state;
   appEl.innerHTML =
@@ -266,11 +305,12 @@ async function renderDashboard(){
       '<aside class="sidebar" id="sidebar">' +
         '<div class="brand"><div class="brand-logo">'+TRUCK_SVG+'</div><div><div class="brand-title">Site Transactions</div><div class="brand-sub">Construction Portal</div></div></div>' +
         '<div class="nav-section-label">MAIN</div>' +
-        '<a class="nav-item active" id="navDashboard"><span class="nav-icon">&#8962;</span> Dashboard</a>' +
-        '<a class="nav-item" id="navTransactions"><span class="nav-icon">&#128203;</span> Transactions</a>' +
-        (['clerk','finance','manager','admin'].includes(user.role) ? '<a class="nav-item" id="navRegistry"><span class="nav-icon">&#128101;</span> Registry</a>' : '') +
+        '<a class="nav-item active" id="navDashboard" data-view="dashboard"><span class="nav-icon">&#8962;</span> Dashboard</a>' +
+        '<a class="nav-item" id="navTransactions" data-view="transactions"><span class="nav-icon">&#128203;</span> Transactions</a>' +
+        (['clerk','finance','manager','admin'].includes(user.role) ? '<a class="nav-item" id="navRegistry" data-view="registry"><span class="nav-icon">&#128101;</span> Registry</a>' : '') +
         '<div class="nav-section-label">ACCOUNT</div>' +
-        '<a class="nav-item" id="navNotifications"><span class="nav-icon">&#128276;</span> Notifications</a>' +
+        '<a class="nav-item" id="navNotifications" data-view="notifications"><span class="nav-icon">&#128276;</span> Notifications</a>' +
+        '<a class="nav-item" id="navSettings" data-view="settings"><span class="nav-icon">&#9881;</span> Settings</a>' +
         '<a class="nav-item" id="navLogout"><span class="nav-icon">&#8618;</span> Log out</a>' +
       '</aside>' +
       '<main class="main">' +
@@ -287,229 +327,221 @@ async function renderDashboard(){
   document.getElementById('menuBtn').onclick = () => { sidebar.classList.toggle('open'); overlay.classList.toggle('open'); };
   overlay.onclick = () => { sidebar.classList.remove('open'); overlay.classList.remove('open'); };
   document.getElementById('navLogout').onclick = logout;
-  function setActiveNav(navEl){ document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active')); navEl.classList.add('active'); }
+  function setActiveNav(navEl){ document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active')); if (navEl) navEl.classList.add('active'); }
   function closeSidebar(){ sidebar.classList.remove('open'); overlay.classList.remove('open'); }
-  document.getElementById('navDashboard').onclick = function(){ setActiveNav(this); document.getElementById('content').scrollIntoView({behavior:'smooth'}); closeSidebar(); };
-  document.getElementById('navTransactions').onclick = function(){ setActiveNav(this); const t=document.getElementById('table'); if(t) t.scrollIntoView({behavior:'smooth',block:'start'}); closeSidebar(); };
-  if (document.getElementById('navRegistry')) {
-    document.getElementById('navRegistry').onclick = function(){
-      setActiveNav(this);
-      const target = document.getElementById('workerAttendance') || document.getElementById('workerAttendanceView') || document.getElementById('weeklyWages');
-      if (target) target.scrollIntoView({behavior:'smooth',block:'start'});
-      closeSidebar();
-    };
-  }
-  document.getElementById('navNotifications').onclick = function(){ setActiveNav(this); const n=document.getElementById('notifList'); if(n) n.scrollIntoView({behavior:'smooth',block:'center'}); closeSidebar(); };
-  document.getElementById('bellIcon').onclick = document.getElementById('navNotifications').onclick;
 
-  const content = document.getElementById('content');
-  let contentHtml = '<div class="card"><div class="topbar"><h2>Notifications</h2><span class="muted" id="notifCount"></span></div><div id="notifList" class="muted">Loading...</div></div>';
-  contentHtml += '<div class="card"><h2>Overview</h2><div id="summaryBox" class="muted">Loading...</div></div>';
-  contentHtml += '<div class="card"><div class="topbar"><h2>Transactions</h2><div>'+(['manager','finance','admin'].includes(user.role)?'<button id="exportBtn" class="secondary">Download Excel</button>':'')+(['manager','admin'].includes(user.role)?' <button id="clearAllBtn" class="danger">Clear all data</button>':'')+'</div></div>' +
-    '<div class="row" style="margin-top:6px;"><input id="filterSearch" placeholder="Search description..." /><select id="filterStatus"><option value="">All statuses</option><option value="pending">Pending</option><option value="approved">Approved</option><option value="paid">Paid</option><option value="rejected">Rejected</option></select><input id="filterFrom" type="date" /><input id="filterTo" type="date" /><button class="secondary" id="filterApply">Filter</button></div>' +
-    '<div id="table"></div><div id="pagination" class="row" style="margin-top:10px;justify-content:flex-end;"></div></div>';
-  if (user.role==='clerk' || user.role==='admin') {
-    contentHtml += '<div class="card"><h2>Log transactions</h2><p class="muted">Add materials, labor, fuel, etc. as separate line items, then submit them together — the total goes to your manager and finance in one notification.</p><div class="row"><div><label>Site ID</label><input id="site_id" placeholder="site UUID" value="'+(user.site_id||'')+'" /></div></div><div id="itemRows"></div><div style="margin-top:8px;"><button class="secondary" id="addItemBtn" type="button">+ Add item</button></div><div class="topbar" style="margin-top:14px;"><strong>Total: <span id="batchTotal">KES 0.00</span></strong><button id="submitBatch">Submit all</button></div><div class="error" id="submitErr"></div></div>';
-    contentHtml += '<div class="card"><h2>Enroll a worker</h2><div class="row"><div><label>Full name</label><input id="w_name" placeholder="Full name" /></div><div><label>ID number</label><input id="w_id" placeholder="National ID number" /></div></div><div class="row"><div><label>Phone number</label><input id="w_phone" placeholder="07xxxxxxxx" /></div><div><label>Designation</label><input id="w_designation" placeholder="e.g. Mason, Fundi, Laborer" /></div><div><label>Daily rate (KES)</label><input id="w_rate" type="number" step="0.01" placeholder="e.g. 800" /></div></div><div style="margin-top:12px;"><button id="enrollWorkerBtn">Enroll worker</button></div><div class="error" id="enrollWorkerErr"></div></div>';
-    contentHtml += '<div class="card"><div class="topbar"><h2>Daily attendance</h2><input id="attDate" type="date" /></div><div id="workerAttendance" class="muted">Loading workers...</div><div style="margin-top:12px;"><button id="submitAttendance">Submit today\\'s attendance</button></div><div class="error" id="attendanceErr"></div><div id="attendanceOk" class="muted"></div></div>';
+  function switchView(view, navEl){
+    setActiveNav(navEl);
+    const content = document.getElementById('content');
+    let html = '';
+    if (view === 'dashboard') html = buildOverviewHtml(user);
+    else if (view === 'transactions') html = buildTransactionsHtml(user);
+    else if (view === 'registry') html = buildRegistryHtml(user);
+    else if (view === 'notifications') html = buildNotificationsHtml(user);
+    else if (view === 'settings') html = buildSettingsHtml(user);
+    content.innerHTML = html;
+    wireContent();
+    closeSidebar();
   }
-  contentHtml += '<div class="card"><h2>Change password</h2><div class="row"><div><label>Current password</label><input id="curPw" type="password" /></div><div><label>New password</label><input id="newPw" type="password" /></div></div><div style="margin-top:12px;"><button id="changePwBtn">Update password</button></div><div class="error" id="changePwErr"></div><div id="changePwOk" class="muted"></div></div>';
-  if (user.role==='manager' || user.role==='admin') {
-    contentHtml += '<div class="card"><h2>Add a clerk or finance login</h2><div class="row"><div><label>Full name</label><input id="new_name" placeholder="Full name" /></div><div><label>Email</label><input id="new_email" type="email" placeholder="person@example.com" /></div><div><label>Role</label><select id="new_role"><option value="clerk">Clerk</option><option value="finance">Finance</option></select></div></div><div style="margin-top:12px;"><button id="createUserBtn">Create login</button></div><div class="error" id="createUserErr"></div><div id="createUserResult"></div></div>';
-    contentHtml += '<div class="card"><h2>Team logins</h2><div id="userList" class="muted">Loading...</div></div>';
-  }
-  if (user.role==='manager' || user.role==='finance') {
-    contentHtml += '<div class="card"><div class="topbar"><h2>Workers & attendance</h2><input id="attViewDate" type="date" /></div><div id="workerAttendanceView" class="muted">Loading...</div></div>';
-  }
-  if (user.role==='finance' || user.role==='manager' || user.role==='admin') {
-    contentHtml += '<div class="card"><div class="topbar"><h2>Weekly wages</h2><div><label style="display:inline;margin-right:6px;">Week starting</label><input id="wagesWeekStart" type="date" /></div></div><div id="weeklyWages" class="muted">Loading...</div><div style="margin-top:10px;text-align:left;">'+(['finance','admin'].includes(user.role)?'<button class="success" id="payAllWagesBtn">Pay all wages</button> ':'')+'<button class="success" id="downloadWagesBtn">Download Excel</button></div><div class="error" id="payWagesErr"></div><div class="muted" id="payWagesOk"></div></div>';
-  }
-  content.innerHTML = contentHtml;
 
-  loadNotifications();
-  loadSummary();
-  if (document.getElementById('userList')) loadUsers();
-  if (document.getElementById('workerAttendance')) {
-    const dateInput = document.getElementById('attDate');
-    dateInput.value = new Date().toISOString().slice(0,10);
-    dateInput.onchange = loadWorkerAttendance;
-    loadWorkerAttendance();
-  }
-  if (document.getElementById('workerAttendanceView')) {
-    const dateInput = document.getElementById('attViewDate');
-    dateInput.value = new Date().toISOString().slice(0,10);
-    dateInput.onchange = loadWorkerAttendanceView;
-    loadWorkerAttendanceView();
-  }
-  if (document.getElementById('weeklyWages')) {
-    const wsInput = document.getElementById('wagesWeekStart');
-    const today = new Date();
-    const day = today.getDay();
-    const diffToMonday = day === 0 ? 6 : day - 1;
-    const monday = new Date(today);
-    monday.setDate(today.getDate() - diffToMonday);
-    wsInput.value = monday.toISOString().slice(0,10);
-    wsInput.onchange = loadWeeklyWages;
-    loadWeeklyWages();
-    document.getElementById('downloadWagesBtn').onclick = () => {
-      const start = document.getElementById('wagesWeekStart').value;
-      fetch(API+'/wages/weekly/export?start='+start, {headers:{Authorization:'Bearer '+state.token}})
-        .then(r=>r.blob()).then(blob=>{
-          const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href=url;
-          a.download = 'weekly-wages-'+start+'.xlsx'; a.click();
-        });
-    };
-    if (document.getElementById('payAllWagesBtn')) {
-      document.getElementById('payAllWagesBtn').onclick = async () => {
+  document.querySelectorAll('[data-view]').forEach(navEl => {
+    navEl.onclick = () => switchView(navEl.dataset.view, navEl);
+  });
+  document.getElementById('bellIcon').onclick = () => switchView('notifications', document.getElementById('navNotifications'));
+
+  function wireContent(){
+    if (document.getElementById('summaryBox')) loadSummary();
+    if (document.getElementById('notifList')) loadNotifications();
+    if (document.getElementById('userList')) loadUsers();
+    if (document.getElementById('workerAttendance')) {
+      const dateInput = document.getElementById('attDate');
+      dateInput.value = new Date().toISOString().slice(0,10);
+      dateInput.onchange = loadWorkerAttendance;
+      loadWorkerAttendance();
+    }
+    if (document.getElementById('workerAttendanceView')) {
+      const dateInput = document.getElementById('attViewDate');
+      dateInput.value = new Date().toISOString().slice(0,10);
+      dateInput.onchange = loadWorkerAttendanceView;
+      loadWorkerAttendanceView();
+    }
+    if (document.getElementById('weeklyWages')) {
+      const wsInput = document.getElementById('wagesWeekStart');
+      const today = new Date();
+      const day = today.getDay();
+      const diffToMonday = day === 0 ? 6 : day - 1;
+      const monday = new Date(today);
+      monday.setDate(today.getDate() - diffToMonday);
+      wsInput.value = monday.toISOString().slice(0,10);
+      wsInput.onchange = loadWeeklyWages;
+      loadWeeklyWages();
+      document.getElementById('downloadWagesBtn').onclick = () => {
         const start = document.getElementById('wagesWeekStart').value;
-        if (!confirm('Pay all outstanding wages for the week starting '+start+'? This settles every worker who hasn\\'t been paid yet for that week.')) return;
-        try {
-          const result = await api('/wages/weekly/pay-all', {method:'POST', body: JSON.stringify({start})});
-          document.getElementById('payWagesErr').textContent = '';
-          if (result.paid_count > 0) {
-            let msg = 'Recorded payment for '+result.paid_count+' worker(s), total '+money(result.total_amount)+'.';
-            if (result.mpesa_enabled) {
-              const sent = (result.results||[]).filter(r=>r.disbursement_status==='sent').length;
-              const failed = (result.results||[]).filter(r=>r.disbursement_status==='failed').length;
-              msg += ' M-Pesa: '+sent+' sent, '+failed+' failed.';
-              const failedNames = (result.results||[]).filter(r=>r.disbursement_status==='failed').map(r=>r.name+' ('+(r.mpesa_result_desc||'error')+')');
-              if (failedNames.length) msg += ' Failed: '+failedNames.join('; ');
+        fetch(API+'/wages/weekly/export?start='+start, {headers:{Authorization:'Bearer '+state.token}})
+          .then(r=>r.blob()).then(blob=>{
+            const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href=url;
+            a.download = 'weekly-wages-'+start+'.xlsx'; a.click();
+          });
+      };
+      if (document.getElementById('payAllWagesBtn')) {
+        document.getElementById('payAllWagesBtn').onclick = async () => {
+          const start = document.getElementById('wagesWeekStart').value;
+          if (!confirm('Pay all outstanding wages for the week starting '+start+'? This settles every worker who hasn\\'t been paid yet for that week.')) return;
+          try {
+            const result = await api('/wages/weekly/pay-all', {method:'POST', body: JSON.stringify({start})});
+            document.getElementById('payWagesErr').textContent = '';
+            if (result.paid_count > 0) {
+              let msg = 'Recorded payment for '+result.paid_count+' worker(s), total '+money(result.total_amount)+'.';
+              if (result.mpesa_enabled) {
+                const sent = (result.results||[]).filter(r=>r.disbursement_status==='sent').length;
+                const failed = (result.results||[]).filter(r=>r.disbursement_status==='failed').length;
+                msg += ' M-Pesa: '+sent+' sent, '+failed+' failed.';
+                const failedNames = (result.results||[]).filter(r=>r.disbursement_status==='failed').map(r=>r.name+' ('+(r.mpesa_result_desc||'error')+')');
+                if (failedNames.length) msg += ' Failed: '+failedNames.join('; ');
+              } else {
+                msg += ' (M-Pesa not configured — recorded as paid manually.)';
+              }
+              document.getElementById('payWagesOk').textContent = msg;
             } else {
-              msg += ' (M-Pesa not configured — recorded as paid manually.)';
+              document.getElementById('payWagesOk').textContent = result.message || 'Nothing to pay.';
             }
-            document.getElementById('payWagesOk').textContent = msg;
-          } else {
-            document.getElementById('payWagesOk').textContent = result.message || 'Nothing to pay.';
-          }
-          loadWeeklyWages(); loadSummary(); loadTable();
-        } catch(e) { document.getElementById('payWagesErr').textContent = e.message; document.getElementById('payWagesOk').textContent=''; }
+            loadWeeklyWages(); loadSummary(); if (document.getElementById('table')) loadTable();
+          } catch(e) { document.getElementById('payWagesErr').textContent = e.message; document.getElementById('payWagesOk').textContent=''; }
+        };
+      }
+    }
+
+    if (document.getElementById('enrollWorkerBtn')) {
+      document.getElementById('enrollWorkerBtn').onclick = async () => {
+        const name = document.getElementById('w_name').value.trim();
+        const id_number = document.getElementById('w_id').value.trim();
+        const phone_number = document.getElementById('w_phone').value.trim();
+        const designation = document.getElementById('w_designation').value.trim();
+        const daily_rate = document.getElementById('w_rate').value;
+        try {
+          await api('/workers', {method:'POST', body: JSON.stringify({name, id_number, phone_number, designation, daily_rate})});
+          document.getElementById('enrollWorkerErr').textContent = '';
+          document.getElementById('w_name').value=''; document.getElementById('w_id').value=''; document.getElementById('w_phone').value=''; document.getElementById('w_designation').value=''; document.getElementById('w_rate').value='';
+          loadWorkerAttendance();
+        } catch(e) { document.getElementById('enrollWorkerErr').textContent = e.message; }
       };
     }
-  }
-
-  if (document.getElementById('enrollWorkerBtn')) {
-    document.getElementById('enrollWorkerBtn').onclick = async () => {
-      const name = document.getElementById('w_name').value.trim();
-      const id_number = document.getElementById('w_id').value.trim();
-      const phone_number = document.getElementById('w_phone').value.trim();
-      const designation = document.getElementById('w_designation').value.trim();
-      const daily_rate = document.getElementById('w_rate').value;
-      try {
-        await api('/workers', {method:'POST', body: JSON.stringify({name, id_number, phone_number, designation, daily_rate})});
-        document.getElementById('enrollWorkerErr').textContent = '';
-        document.getElementById('w_name').value=''; document.getElementById('w_id').value=''; document.getElementById('w_phone').value=''; document.getElementById('w_designation').value=''; document.getElementById('w_rate').value='';
-        loadWorkerAttendance();
-      } catch(e) { document.getElementById('enrollWorkerErr').textContent = e.message; }
-    };
-  }
-  if (document.getElementById('submitAttendance')) {
-    document.getElementById('submitAttendance').onclick = async () => {
-      const attendance_date = document.getElementById('attDate').value;
-      const worker_ids = Array.from(document.querySelectorAll('[data-worker-check]:checked')).map(cb => cb.dataset.workerCheck);
-      if (worker_ids.length === 0) { document.getElementById('attendanceErr').textContent = 'Select at least one worker.'; return; }
-      try {
-        const result = await api('/attendance', {method:'POST', body: JSON.stringify({attendance_date, worker_ids})});
-        document.getElementById('attendanceErr').textContent = '';
-        document.getElementById('attendanceOk').textContent = 'Attendance recorded for '+result.recorded+' worker(s) on '+result.date+'.';
-      } catch(e) { document.getElementById('attendanceErr').textContent = e.message; document.getElementById('attendanceOk').textContent=''; }
-    };
-  }
-
-  document.getElementById('changePwBtn').onclick = async () => {
-    const current_password = document.getElementById('curPw').value;
-    const new_password = document.getElementById('newPw').value;
-    try {
-      await api('/auth/change-password', {method:'POST', body: JSON.stringify({current_password, new_password})});
-      document.getElementById('changePwErr').textContent = '';
-      document.getElementById('changePwOk').textContent = 'Password updated.';
-      document.getElementById('curPw').value=''; document.getElementById('newPw').value='';
-    } catch(e) { document.getElementById('changePwErr').textContent = e.message; document.getElementById('changePwOk').textContent=''; }
-  };
-
-  if (document.getElementById('createUserBtn')) {
-    document.getElementById('createUserBtn').onclick = async () => {
-      const full_name = document.getElementById('new_name').value.trim();
-      const email = document.getElementById('new_email').value.trim();
-      const role = document.getElementById('new_role').value;
-      try {
-        const result = await api('/users', {method:'POST', body: JSON.stringify({full_name, email, role})});
-        document.getElementById('createUserErr').textContent = '';
-        document.getElementById('createUserResult').innerHTML = '<div class="card" style="background:#e2f1e8;margin-top:10px;"><strong>Login created.</strong><br/>Email: '+result.email+'<br/>Temporary password: <strong>'+result.temporary_password+'</strong><br/><span class="muted">Share this with them directly — it will not be shown again.</span></div>';
-        document.getElementById('new_name').value=''; document.getElementById('new_email').value='';
-        loadUsers();
-      } catch(e) { document.getElementById('createUserErr').textContent = e.message; }
-    };
-  }
-
-  if (document.getElementById('itemRows')) {
-    let itemCounter = 0;
-    function itemRowHtml(n){
-      return '<div class="row" id="itemRow-'+n+'" style="align-items:flex-end;">' +
-        '<div><label>Category</label><select id="itemCat-'+n+'"><option value="materials">Materials</option><option value="labor">Labor</option><option value="equipment">Equipment</option><option value="fuel">Fuel</option><option value="other">Other</option></select></div>' +
-        '<div style="flex:2;"><label>Description</label><input id="itemDesc-'+n+'" placeholder="What was this for?" /></div>' +
-        '<div><label>Amount (KES)</label><input id="itemAmt-'+n+'" type="number" step="0.01" data-item-amt /></div>' +
-        '<div><button class="danger" type="button" data-remove-item="'+n+'" style="padding:9px 10px;">&times;</button></div>' +
-      '</div>';
+    if (document.getElementById('submitAttendance')) {
+      document.getElementById('submitAttendance').onclick = async () => {
+        const attendance_date = document.getElementById('attDate').value;
+        const worker_ids = Array.from(document.querySelectorAll('[data-worker-check]:checked')).map(cb => cb.dataset.workerCheck);
+        if (worker_ids.length === 0) { document.getElementById('attendanceErr').textContent = 'Select at least one worker.'; return; }
+        try {
+          const result = await api('/attendance', {method:'POST', body: JSON.stringify({attendance_date, worker_ids})});
+          document.getElementById('attendanceErr').textContent = '';
+          document.getElementById('attendanceOk').textContent = 'Attendance recorded for '+result.recorded+' worker(s) on '+result.date+'.';
+        } catch(e) { document.getElementById('attendanceErr').textContent = e.message; document.getElementById('attendanceOk').textContent=''; }
+      };
     }
-    function addItemRow(){
-      itemCounter++;
-      document.getElementById('itemRows').insertAdjacentHTML('beforeend', itemRowHtml(itemCounter));
-      const removeBtn = document.querySelector('[data-remove-item="'+itemCounter+'"]');
-      removeBtn.onclick = () => { document.getElementById('itemRow-'+itemCounter).remove(); updateBatchTotal(); };
-      document.getElementById('itemAmt-'+itemCounter).addEventListener('input', updateBatchTotal);
-    }
-    function updateBatchTotal(){
-      let total = 0;
-      document.querySelectorAll('[data-item-amt]').forEach(inp => { total += Number(inp.value) || 0; });
-      document.getElementById('batchTotal').textContent = money(total);
-    }
-    document.getElementById('addItemBtn').onclick = addItemRow;
-    addItemRow(); // start with one row
 
-    document.getElementById('submitBatch').onclick = async () => {
-      const site_id = document.getElementById('site_id').value.trim();
-      const rows = document.querySelectorAll('#itemRows > div');
-      const items = [];
-      let hasError = false;
-      rows.forEach(row => {
-        const n = row.id.replace('itemRow-','');
-        const category = document.getElementById('itemCat-'+n).value;
-        const description = document.getElementById('itemDesc-'+n).value.trim();
-        const amount = document.getElementById('itemAmt-'+n).value;
-        if (!description || !amount) { hasError = true; return; }
-        items.push({category, description, amount});
-      });
-      if (!site_id) { document.getElementById('submitErr').textContent = 'Site ID is required.'; return; }
-      if (hasError || items.length === 0) { document.getElementById('submitErr').textContent = 'Fill in description and amount for every item.'; return; }
-      try {
-        await api('/batches', {method:'POST', body: JSON.stringify({site_id, items})});
-        document.getElementById('submitErr').textContent = '';
-        document.getElementById('itemRows').innerHTML = '';
-        itemCounter = 0;
-        addItemRow();
-        updateBatchTotal();
-        loadTable(); loadSummary();
-      } catch(e){ document.getElementById('submitErr').textContent = e.message; }
-    };
+    if (document.getElementById('changePwBtn')) {
+      document.getElementById('changePwBtn').onclick = async () => {
+        const current_password = document.getElementById('curPw').value;
+        const new_password = document.getElementById('newPw').value;
+        try {
+          await api('/auth/change-password', {method:'POST', body: JSON.stringify({current_password, new_password})});
+          document.getElementById('changePwErr').textContent = '';
+          document.getElementById('changePwOk').textContent = 'Password updated.';
+          document.getElementById('curPw').value=''; document.getElementById('newPw').value='';
+        } catch(e) { document.getElementById('changePwErr').textContent = e.message; document.getElementById('changePwOk').textContent=''; }
+      };
+    }
+
+    if (document.getElementById('createUserBtn')) {
+      document.getElementById('createUserBtn').onclick = async () => {
+        const full_name = document.getElementById('new_name').value.trim();
+        const email = document.getElementById('new_email').value.trim();
+        const role = document.getElementById('new_role').value;
+        try {
+          const result = await api('/users', {method:'POST', body: JSON.stringify({full_name, email, role})});
+          document.getElementById('createUserErr').textContent = '';
+          document.getElementById('createUserResult').innerHTML = '<div class="card" style="background:#e2f1e8;margin-top:10px;"><strong>Login created.</strong><br/>Email: '+result.email+'<br/>Temporary password: <strong>'+result.temporary_password+'</strong><br/><span class="muted">Share this with them directly — it will not be shown again.</span></div>';
+          document.getElementById('new_name').value=''; document.getElementById('new_email').value='';
+          loadUsers();
+        } catch(e) { document.getElementById('createUserErr').textContent = e.message; }
+      };
+    }
+
+    if (document.getElementById('itemRows')) {
+      let itemCounter = 0;
+      function itemRowHtml(n){
+        return '<div class="row" id="itemRow-'+n+'" style="align-items:flex-end;">' +
+          '<div><label>Category</label><select id="itemCat-'+n+'"><option value="materials">Materials</option><option value="labor">Labor</option><option value="equipment">Equipment</option><option value="fuel">Fuel</option><option value="other">Other</option></select></div>' +
+          '<div style="flex:2;"><label>Description</label><input id="itemDesc-'+n+'" placeholder="What was this for?" /></div>' +
+          '<div><label>Amount (KES)</label><input id="itemAmt-'+n+'" type="number" step="0.01" data-item-amt /></div>' +
+          '<div><button class="danger" type="button" data-remove-item="'+n+'" style="padding:9px 10px;">&times;</button></div>' +
+        '</div>';
+      }
+      function addItemRow(){
+        itemCounter++;
+        document.getElementById('itemRows').insertAdjacentHTML('beforeend', itemRowHtml(itemCounter));
+        const removeBtn = document.querySelector('[data-remove-item="'+itemCounter+'"]');
+        removeBtn.onclick = () => { document.getElementById('itemRow-'+itemCounter).remove(); updateBatchTotal(); };
+        document.getElementById('itemAmt-'+itemCounter).addEventListener('input', updateBatchTotal);
+      }
+      function updateBatchTotal(){
+        let total = 0;
+        document.querySelectorAll('[data-item-amt]').forEach(inp => { total += Number(inp.value) || 0; });
+        document.getElementById('batchTotal').textContent = money(total);
+      }
+      document.getElementById('addItemBtn').onclick = addItemRow;
+      addItemRow(); // start with one row
+
+      document.getElementById('submitBatch').onclick = async () => {
+        const site_id = document.getElementById('site_id').value.trim();
+        const rows = document.querySelectorAll('#itemRows > div');
+        const items = [];
+        let hasError = false;
+        rows.forEach(row => {
+          const n = row.id.replace('itemRow-','');
+          const category = document.getElementById('itemCat-'+n).value;
+          const description = document.getElementById('itemDesc-'+n).value.trim();
+          const amount = document.getElementById('itemAmt-'+n).value;
+          if (!description || !amount) { hasError = true; return; }
+          items.push({category, description, amount});
+        });
+        if (!site_id) { document.getElementById('submitErr').textContent = 'Site ID is required.'; return; }
+        if (hasError || items.length === 0) { document.getElementById('submitErr').textContent = 'Fill in description and amount for every item.'; return; }
+        try {
+          await api('/batches', {method:'POST', body: JSON.stringify({site_id, items})});
+          document.getElementById('submitErr').textContent = '';
+          document.getElementById('itemRows').innerHTML = '';
+          itemCounter = 0;
+          addItemRow();
+          updateBatchTotal();
+          if (document.getElementById('table')) loadTable();
+          loadSummary();
+        } catch(e){ document.getElementById('submitErr').textContent = e.message; }
+      };
+    }
+    if (document.getElementById('exportBtn')) {
+      document.getElementById('exportBtn').onclick = () => {
+        fetch(API+'/export', {headers:{Authorization:'Bearer '+state.token}}).then(r=>r.blob()).then(blob=>{
+          const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href=url;
+          a.download = 'site-transactions-'+new Date().toISOString().slice(0,10)+'.xlsx'; a.click();
+        });
+      };
+    }
+    if (document.getElementById('clearAllBtn')) {
+      document.getElementById('clearAllBtn').onclick = async () => {
+        if (!confirm('This will permanently delete ALL transaction data for your site. Are you sure?')) return;
+        if (!confirm('Really sure? This cannot be undone.')) return;
+        try { await api('/transactions?confirm=yes', {method:'DELETE'}); loadTable(); loadSummary(); }
+        catch(e){ alert(e.message); }
+      };
+    }
+    if (document.getElementById('filterApply')) {
+      document.getElementById('filterApply').onclick = () => { tablePage = 0; loadTable(); };
+    }
+    if (document.getElementById('table')) loadTable();
   }
-  if (document.getElementById('exportBtn')) {
-    document.getElementById('exportBtn').onclick = () => {
-      fetch(API+'/export', {headers:{Authorization:'Bearer '+state.token}}).then(r=>r.blob()).then(blob=>{
-        const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href=url;
-        a.download = 'site-transactions-'+new Date().toISOString().slice(0,10)+'.xlsx'; a.click();
-      });
-    };
-  }
-  if (document.getElementById('clearAllBtn')) {
-    document.getElementById('clearAllBtn').onclick = async () => {
-      if (!confirm('This will permanently delete ALL transaction data for your site. Are you sure?')) return;
-      if (!confirm('Really sure? This cannot be undone.')) return;
-      try { await api('/transactions?confirm=yes', {method:'DELETE'}); loadTable(); loadSummary(); }
-      catch(e){ alert(e.message); }
-    };
-  }
-  document.getElementById('filterApply').onclick = () => { tablePage = 0; loadTable(); };
-  loadTable();
+
+  switchView('dashboard', document.getElementById('navDashboard'));
 }
 let tablePage = 0;
 const PAGE_SIZE = 20;
