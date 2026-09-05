@@ -280,6 +280,7 @@ function buildTransactionsHtml(user){
 function buildRegistryHtml(user){
   let html = '';
   if (user.role==='clerk' || user.role==='manager' || user.role==='admin') {
+    html += '<div class="card"><h2>Offline worker registration form</h2><p class="muted">No network? Download this, fill it by hand for each worker, then enter them into the app once you\\'re back online.</p><button class="secondary" id="downloadWorkerFormBtn">Download blank form (PDF)</button></div>';
     html += '<div class="card"><h2>Enroll a worker</h2><div class="row"><div><label>Full name</label><input id="w_name" placeholder="Full name" /></div><div><label>ID number</label><input id="w_id" placeholder="National ID number" /></div></div><div class="row"><div><label>Phone number</label><input id="w_phone" placeholder="07xxxxxxxx" /></div><div><label>Designation</label><input id="w_designation" placeholder="e.g. Mason, Fundi, Laborer" /></div><div><label>Daily rate (KES)</label><input id="w_rate" type="number" step="0.01" placeholder="e.g. 800" /></div></div><div style="margin-top:12px;"><button id="enrollWorkerBtn">Enroll worker</button></div><div class="error" id="enrollWorkerErr"></div></div>';
   }
   if (user.role==='clerk' || user.role==='admin') {
@@ -549,6 +550,14 @@ async function renderDashboard(){
         fetch(API+'/forms/transaction-log.pdf', {headers:{Authorization:'Bearer '+state.token}}).then(r=>r.blob()).then(blob=>{
           const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href=url;
           a.download = 'site-transaction-log-form.pdf'; a.click();
+        });
+      };
+    }
+    if (document.getElementById('downloadWorkerFormBtn')) {
+      document.getElementById('downloadWorkerFormBtn').onclick = () => {
+        fetch(API+'/forms/worker-registration.pdf', {headers:{Authorization:'Bearer '+state.token}}).then(r=>r.blob()).then(blob=>{
+          const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href=url;
+          a.download = 'worker-registration-form.pdf'; a.click();
         });
       };
     }
@@ -1690,6 +1699,49 @@ app.get('/api/forms/transaction-log.pdf', requireAuth, async (req, res) => {
   doc.font('Helvetica').fontSize(8).fillColor('#777').text(
     'Fill this out by hand when there is no network connection. Once back online, submit these entries in the app and upload a photo of this sheet under "Documents" for the record.',
     40, y + 45, { width: 515 }
+  );
+
+  doc.end();
+});
+
+app.get('/api/forms/worker-registration.pdf', requireAuth, async (req, res) => {
+  const doc = new PDFDocument({ margin: 40, size: 'A4' });
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', 'attachment; filename="worker-registration-form.pdf"');
+  doc.pipe(res);
+
+  const forest = '#0f2818';
+  doc.roundedRect(40, 40, 40, 40, 8).fillAndStroke('#eaf7ee', forest);
+  doc.rect(48, 55, 18, 12).fill(forest);
+  doc.circle(54, 70, 3).fill(forest);
+  doc.circle(66, 70, 3).fill(forest);
+
+  doc.fillColor(forest).fontSize(20).font('Helvetica-Bold').text('Site Transactions', 90, 45);
+  doc.fontSize(10).font('Helvetica').fillColor('#555').text('Construction Portal — Worker Registration Form', 90, 68);
+
+  doc.fontSize(9).fillColor('#333');
+  doc.text('Site name / ID: ______________________________        Date: ______________', 40, 110);
+  doc.text('Recorded by: ______________________________        Signature: ______________', 40, 128);
+
+  const tableTop = 165;
+  const colX = { name: 40, id: 160, phone: 250, desig: 340, rate: 460 };
+  doc.font('Helvetica-Bold').fontSize(8);
+  doc.text('Full Name', colX.name, tableTop);
+  doc.text('ID Number', colX.id, tableTop);
+  doc.text('Phone Number', colX.phone, tableTop);
+  doc.text('Designation', colX.desig, tableTop);
+  doc.text('Daily Rate', colX.rate, tableTop);
+  doc.moveTo(40, tableTop + 12).lineTo(555, tableTop + 12).stroke();
+
+  let y = tableTop + 20;
+  for (let i = 0; i < 20; i++) {
+    doc.moveTo(40, y + 20).lineTo(555, y + 20).strokeColor('#ddd').stroke();
+    y += 24;
+  }
+
+  doc.font('Helvetica').fontSize(8).fillColor('#777').text(
+    'Fill this out by hand when there is no network connection. Once back online, enter each worker under "Enroll a worker" in the app, and upload a photo of this sheet under "Documents" for the record.',
+    40, y + 20, { width: 515 }
   );
 
   doc.end();
