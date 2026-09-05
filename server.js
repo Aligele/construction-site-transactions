@@ -1062,7 +1062,10 @@ render();
 </body>
 </html>`;
 
-app.get('/', (req, res) => res.type('html').send(INDEX_HTML));
+app.get('/', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+  res.type('html').send(INDEX_HTML);
+});
 
 // ---------- Auth routes ----------
 const MAX_FAILED_ATTEMPTS = 5;
