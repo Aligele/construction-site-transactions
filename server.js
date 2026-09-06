@@ -868,13 +868,13 @@ async function toggleDetails(txnId){
     }
     html += '<strong>Assigned partners/vendors</strong>';
     html += vendorLinks.length ? '<ul style="padding-left:18px;margin:6px 0;">' + vendorLinks.map(v =>
-      '<li>'+v.vendor.name+' <span class="muted">('+v.vendor.role_type+')</span>'+(canManage?' <button class="danger" style="padding:2px 6px;font-size:11px;" data-remove-vendor="'+v.id+'">remove</button>':'')+'</li>'
+      '<li>'+v.vendor.name+' <span class="muted">('+v.vendor.role_type+')</span>'+(v.supplied_item?' — <em>'+v.supplied_item+'</em>':'')+(canManage?' <button class="danger" style="padding:2px 6px;font-size:11px;" data-remove-vendor="'+v.id+'">remove</button>':'')+'</li>'
     ).join('') + '</ul>' : '<div class="muted">No vendors assigned.</div>';
 
     if (canManage) {
       html += '<div class="row" style="margin-top:8px;"><select id="vendorSelect-'+txnId+'">' +
         allVendors.map(v => '<option value="'+v.id+'">'+v.name+' ('+v.role_type+')</option>').join('') +
-        '</select><button data-assign-vendor="'+txnId+'">Assign</button></div>';
+        '</select><input id="suppliedItem-'+txnId+'" placeholder="What was supplied? (e.g. 50 bags cement)" /><button data-assign-vendor="'+txnId+'">Assign</button></div>';
       html += '<div class="muted" style="margin-top:6px;">New vendor: <input id="newVendorName-'+txnId+'" placeholder="Name" style="width:120px;" /> <select id="newVendorType-'+txnId+'"><option value="vendor">Vendor</option><option value="inspector">Inspector</option><option value="legal_counsel">Legal Counsel</option><option value="underwriter">Underwriter</option><option value="other">Other</option></select> <button class="secondary" data-add-vendor="'+txnId+'">Add</button></div>';
     }
     body.innerHTML = html;
@@ -885,7 +885,8 @@ async function toggleDetails(txnId){
     const assignBtn = body.querySelector('[data-assign-vendor]');
     if (assignBtn) assignBtn.onclick = async () => {
       const vendor_id = document.getElementById('vendorSelect-'+txnId).value;
-      try { await api('/transactions/'+txnId+'/vendors', {method:'POST', body: JSON.stringify({vendor_id})}); openDetails[txnId]=false; toggleDetails(txnId); }
+      const supplied_item = document.getElementById('suppliedItem-'+txnId).value.trim();
+      try { await api('/transactions/'+txnId+'/vendors', {method:'POST', body: JSON.stringify({vendor_id, supplied_item})}); openDetails[txnId]=false; toggleDetails(txnId); }
       catch(e){ alert(e.message); }
     };
     const addBtn = body.querySelector('[data-add-vendor]');
@@ -971,8 +972,8 @@ async function toggleSupplierDetails(id){
   try {
     const txns = await api('/suppliers/'+id+'/transactions');
     if (!txns.length) { body.innerHTML = '<span class="muted">Nothing supplied/linked yet — assign this supplier to a transaction under that transaction\\'s Details panel.</span>'; return; }
-    body.innerHTML = '<strong>What has been supplied</strong><table style="margin-top:6px;"><thead><tr><th>Date</th><th>Category</th><th>Description</th><th>Amount</th><th>Status</th></tr></thead><tbody>' +
-      txns.map(t => '<tr><td>'+t.transaction_date+'</td><td>'+t.category+'</td><td>'+t.description+'</td><td>'+money(t.amount)+'</td><td>'+badge(t.status)+'</td></tr>').join('') +
+    body.innerHTML = '<strong>What has been supplied</strong><table style="margin-top:6px;"><thead><tr><th>Date</th><th>Supplied</th><th>Category</th><th>Amount</th><th>Status</th></tr></thead><tbody>' +
+      txns.map(t => '<tr><td>'+t.transaction_date+'</td><td>'+(t.supplied_item?'<strong>'+t.supplied_item+'</strong><br/><span class="muted">'+t.description+'</span>':t.description)+'</td><td>'+t.category+'</td><td>'+money(t.amount)+'</td><td>'+badge(t.status)+'</td></tr>').join('') +
       '</tbody></table>';
   } catch(e) { body.textContent = 'Could not load supplier transactions.'; }
 }
@@ -1772,15 +1773,15 @@ app.post('/api/vendors', requireAuth, requireRole('manager', 'finance', 'admin')
 });
 
 app.get('/api/transactions/:id/vendors', requireAuth, async (req, res) => {
-  const { data, error } = await supabase.from('cst_transaction_vendors').select('id, vendor:vendor_id(id, name, role_type, contact_phone, contact_email)').eq('transaction_id', req.params.id);
+  const { data, error } = await supabase.from('cst_transaction_vendors').select('id, supplied_item, vendor:vendor_id(id, name, role_type, contact_phone, contact_email)').eq('transaction_id', req.params.id);
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
 
 app.post('/api/transactions/:id/vendors', requireAuth, requireRole('manager', 'finance', 'admin'), async (req, res) => {
-  const { vendor_id } = req.body;
+  const { vendor_id, supplied_item } = req.body;
   if (!vendor_id) return res.status(400).json({ error: 'vendor_id is required' });
-  const { data, error } = await supabase.from('cst_transaction_vendors').insert({ transaction_id: req.params.id, vendor_id }).select().single();
+  const { data, error } = await supabase.from('cst_transaction_vendors').insert({ transaction_id: req.params.id, vendor_id, supplied_item: supplied_item || null }).select().single();
   if (error) {
     if (error.message.includes('duplicate')) return res.status(409).json({ error: 'That vendor is already assigned to this transaction' });
     return res.status(500).json({ error: error.message });
@@ -2446,12 +2447,15 @@ app.post('/api/suppliers', requireAuth, requireRole('manager', 'finance', 'admin
 });
 
 app.get('/api/suppliers/:id/transactions', requireAuth, requireRole('manager', 'finance', 'admin'), async (req, res) => {
-  const { data: links, error } = await supabase.from('cst_transaction_vendors').select('transaction_id').eq('vendor_id', req.params.id);
+  const { data: links, error } = await supabase.from('cst_transaction_vendors').select('transaction_id, supplied_item').eq('vendor_id', req.params.id);
   if (error) return res.status(500).json({ error: error.message });
+  if (!links.length) return res.json([]);
   const txnIds = links.map(l => l.transaction_id);
-  if (!txnIds.length) return res.json([]);
   const { data: txns } = await supabase.from('cst_transactions').select('*').in('id', txnIds).order('transaction_date', { ascending: false });
-  res.json(txns || []);
+  const suppliedMap = {};
+  for (const l of links) suppliedMap[l.transaction_id] = l.supplied_item;
+  const merged = (txns || []).map(t => ({ ...t, supplied_item: suppliedMap[t.id] || null }));
+  res.json(merged);
 });
 
 app.delete('/api/suppliers/:id', requireAuth, requireRole('manager', 'admin'), async (req, res) => {
