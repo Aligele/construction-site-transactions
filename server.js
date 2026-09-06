@@ -77,7 +77,7 @@ const ExcelJS = require('exceljs');
 const { createClient } = require('@supabase/supabase-js');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
-const CATEGORIES = ['materials', 'labor', 'equipment', 'fuel', 'other'];
+const CATEGORIES = ['materials', 'equipment', 'fuel', 'other'];
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
   auth: { autoRefreshToken: false, persistSession: false }
@@ -396,9 +396,18 @@ function buildSettingsHtml(user){
 
 function buildStoreHtml(user){
   const canManage = ['storekeeper','manager','admin'].includes(user.role);
+  const canReceive = ['storekeeper','clerk','manager','admin'].includes(user.role);
   let html = '';
+  if (canReceive) {
+    html += '<div class="card"><h2>Record a delivery</h2><p class="muted">When a supplier brings materials to site, record it all in one go — the supplier, what they brought, and what you owe them. This creates a pending payment for manager and finance to approve.</p>' +
+      '<div class="row"><div><label>Supplier (existing)</label><select id="dv_supplier"><option value="">— or type a new one below —</option></select></div><div><label>New supplier name</label><input id="dv_new_supplier" placeholder="Only if not in the list" /></div></div>' +
+      '<div class="row"><div><label>Material (existing)</label><select id="dv_item"><option value="">— or type a new one below —</option></select></div><div><label>New material name</label><input id="dv_new_item" placeholder="e.g. Cement (50kg bags)" /></div><div><label>Unit (for new material)</label><input id="dv_new_unit" placeholder="e.g. bags, liters" /></div></div>' +
+      '<div class="row"><div><label>Quantity delivered</label><input id="dv_qty" type="number" step="0.01" /></div><div><label>Amount owed (KES)</label><input id="dv_amount" type="number" step="0.01" /></div></div>' +
+      '<label>Note (optional)</label><input id="dv_note" placeholder="e.g. delivery note number" style="width:100%;" />' +
+      '<div style="margin-top:12px;"><button id="recordDeliveryBtn">Record delivery</button></div><div class="error" id="deliveryErr"></div><div class="muted" id="deliveryOk"></div></div>';
+  }
   if (canManage) {
-    html += '<div class="card"><h2>Add a material</h2><div class="row"><div><label>Material name</label><input id="item_name" placeholder="e.g. Cement (50kg bags)" /></div><div><label>Unit</label><input id="item_unit" placeholder="e.g. bags, liters, pieces" /></div></div><div class="row"><div><label>Initial quantity</label><input id="item_qty" type="number" step="0.01" placeholder="0" /></div><div><label>Reorder level (alert below this)</label><input id="item_reorder" type="number" step="0.01" placeholder="optional" /></div></div><div style="margin-top:12px;"><button id="addItemMaterialBtn">Add material</button></div><div class="error" id="addItemErr"></div></div>';
+    html += '<div class="card"><h2>Add a material manually</h2><p class="muted">Use this to start tracking a material with no delivery yet (e.g. zero starting stock).</p><div class="row"><div><label>Material name</label><input id="item_name" placeholder="e.g. Cement (50kg bags)" /></div><div><label>Unit</label><input id="item_unit" placeholder="e.g. bags, liters, pieces" /></div></div><div class="row"><div><label>Initial quantity</label><input id="item_qty" type="number" step="0.01" placeholder="0" /></div><div><label>Reorder level (alert below this)</label><input id="item_reorder" type="number" step="0.01" placeholder="optional" /></div></div><div style="margin-top:12px;"><button id="addItemMaterialBtn">Add material</button></div><div class="error" id="addItemErr"></div></div>';
   }
   html += '<div class="card"><div class="topbar"><h2>Material stock</h2><button class="success" id="downloadStockPdfBtn">Download PDF report</button></div><div id="storeList"><div class="skeleton" style="width:85%;"></div><div class="skeleton" style="width:60%;"></div></div></div>';
   return html;
@@ -486,6 +495,37 @@ async function renderDashboard(){
     if (document.getElementById('notifList')) loadNotifications();
     if (document.getElementById('userList')) loadUsers();
     if (document.getElementById('storeList')) loadStoreItems();
+    if (document.getElementById('recordDeliveryBtn')) {
+      (async () => {
+        try {
+          const [suppliers, items] = await Promise.all([
+            api('/vendors').then(v => v.filter(x => x.role_type === 'vendor')),
+            api('/store/items')
+          ]);
+          document.getElementById('dv_supplier').innerHTML += suppliers.map(s => '<option value="'+s.id+'">'+s.name+'</option>').join('');
+          document.getElementById('dv_item').innerHTML += items.map(i => '<option value="'+i.id+'" data-unit="'+i.unit+'">'+i.name+' ('+i.unit+')</option>').join('');
+        } catch {}
+      })();
+      document.getElementById('recordDeliveryBtn').onclick = async () => {
+        const supplier_id = document.getElementById('dv_supplier').value;
+        const new_supplier_name = document.getElementById('dv_new_supplier').value.trim();
+        const item_id = document.getElementById('dv_item').value;
+        const new_item_name = document.getElementById('dv_new_item').value.trim();
+        const new_item_unit = document.getElementById('dv_new_unit').value.trim();
+        const quantity = document.getElementById('dv_qty').value;
+        const amount = document.getElementById('dv_amount').value;
+        const description = document.getElementById('dv_note').value.trim();
+        if (!supplier_id && !new_supplier_name) { document.getElementById('deliveryErr').textContent = 'Pick a supplier or type a new supplier name.'; return; }
+        if (!item_id && !new_item_name) { document.getElementById('deliveryErr').textContent = 'Pick a material or type a new material name.'; return; }
+        try {
+          await api('/deliveries', {method:'POST', body: JSON.stringify({supplier_id, new_supplier_name, item_id, new_item_name, new_item_unit, quantity, amount, description})});
+          document.getElementById('deliveryErr').textContent = '';
+          document.getElementById('deliveryOk').textContent = 'Delivery recorded — stock updated and a pending payment was sent for approval.';
+          ['dv_new_supplier','dv_new_item','dv_new_unit','dv_qty','dv_amount','dv_note'].forEach(id => document.getElementById(id).value = '');
+          loadStoreItems();
+        } catch(e) { document.getElementById('deliveryErr').textContent = e.message; document.getElementById('deliveryOk').textContent=''; }
+      };
+    }
     if (document.getElementById('analyticsStatusChart')) loadAnalytics();
     if (document.getElementById('supplierList')) loadSuppliers();
     if (document.getElementById('addSupplierBtn')) {
@@ -643,7 +683,7 @@ async function renderDashboard(){
       let itemCounter = 0;
       function itemRowHtml(n){
         return '<div class="row" id="itemRow-'+n+'" style="align-items:flex-end;">' +
-          '<div><label>Category</label><select id="itemCat-'+n+'"><option value="materials">Materials</option><option value="labor">Labor</option><option value="equipment">Equipment</option><option value="fuel">Fuel</option><option value="other">Other</option></select></div>' +
+          '<div><label>Category</label><select id="itemCat-'+n+'"><option value="materials">Materials</option><option value="equipment">Equipment</option><option value="fuel">Fuel</option><option value="other">Other</option></select></div>' +
           '<div style="flex:2;"><label>Description</label><input id="itemDesc-'+n+'" placeholder="What was this for?" /></div>' +
           '<div><label>Amount (KES)</label><input id="itemAmt-'+n+'" type="number" step="0.01" data-item-amt /></div>' +
           '<div><button class="danger" type="button" data-remove-item="'+n+'" style="padding:9px 10px;">&times;</button></div>' +
@@ -1146,28 +1186,22 @@ async function loadStoreItems(){
       items.map(i => {
         const low = i.reorder_level && Number(i.quantity_in_stock) <= Number(i.reorder_level);
         return '<tr><td>'+i.name+'</td><td>'+i.total_in+' '+i.unit+'</td><td>'+i.total_out+' '+i.unit+'</td><td>'+(low?'<span class="badge rejected">':'<strong>')+i.quantity_in_stock+' '+i.unit+(low?'</span>':'</strong>')+'</td><td>'+(i.reorder_level||'—')+'</td>' +
-          '<td class="actions">'+(canReceive?'<button class="success" data-move-in="'+i.id+'">Stock in (delivery)</button> ':'')+(canManage?'<button class="danger" data-move-out="'+i.id+'">Stock out</button>':'')+(canDelete?' <button class="secondary" data-del-item="'+i.id+'">Remove</button>':'')+'</td></tr>';
+          '<td class="actions">'+(low&&canReceive?'<button class="success" data-reorder="'+i.id+'">Request reorder</button> ':'')+(canManage?'<button class="danger" data-move-out="'+i.id+'">Stock out</button>':'')+(canDelete?' <button class="secondary" data-del-item="'+i.id+'">Remove</button>':'')+'</td></tr>';
       }).join('') +
       '</tbody></table>';
 
-    let suppliers = [];
-    if (canReceive) { try { suppliers = (await api('/vendors')).filter(v => v.role_type === 'vendor'); } catch {} }
-
-    el.querySelectorAll('[data-move-in]').forEach(btn => {
+    el.querySelectorAll('[data-reorder]').forEach(btn => {
       btn.onclick = async () => {
-        const id = btn.dataset.moveIn;
-        const quantity = prompt('Quantity received (delivered):');
+        const id = btn.dataset.reorder;
+        const quantity = prompt('How much do you want to reorder?');
         if (!quantity) return;
-        let supplier_id = null;
-        if (suppliers.length) {
-          const list = suppliers.map((s,i) => (i+1)+'. '+s.name).join('\\n');
-          const pick = prompt('Which supplier delivered this? Type the number, or leave blank if none:\\n'+list);
-          const idx = parseInt(pick);
-          if (!isNaN(idx) && suppliers[idx-1]) supplier_id = suppliers[idx-1].id;
-        }
-        const reason = prompt('Note (optional, e.g. delivery note number):') || '';
-        try { await api('/store/items/'+id+'/movement', {method:'POST', body: JSON.stringify({movement_type:'in', quantity, reason, supplier_id})}); loadStoreItems(); }
-        catch(e){ alert(e.message); }
+        const estimated_amount = prompt('Estimated cost (KES) — this goes to manager and finance for approval:');
+        if (!estimated_amount) return;
+        const note = prompt('Note (optional):') || '';
+        try {
+          await api('/store/items/'+id+'/reorder-request', {method:'POST', body: JSON.stringify({quantity, estimated_amount, note})});
+          alert('Reorder request submitted — manager and finance will review it.');
+        } catch(e){ alert(e.message); }
       };
     });
     el.querySelectorAll('[data-move-out]').forEach(btn => {
@@ -2501,6 +2535,93 @@ app.get('/api/suppliers/:id/deliveries', requireAuth, requireRole('manager', 'fi
   const { data: movements, error } = await supabase.from('cst_store_movements').select('*, item:item_id(name, unit), recorder:recorded_by(full_name)').eq('supplier_id', req.params.id).order('created_at', { ascending: false });
   if (error) return res.status(500).json({ error: error.message });
   res.json(movements || []);
+});
+
+// ---------- Combined delivery recording: supplier + materials + payment, all at once ----------
+app.post('/api/deliveries', requireAuth, requireRole('clerk', 'storekeeper', 'manager', 'admin'), async (req, res) => {
+  const { supplier_id, new_supplier_name, item_id, new_item_name, new_item_unit, quantity, amount, description } = req.body;
+  const site_id = req.user.site_id;
+  if (!site_id) return res.status(400).json({ error: 'Your account has no site associated with it' });
+  if (!quantity || Number(quantity) <= 0) return res.status(400).json({ error: 'quantity must be greater than 0' });
+  if (!amount || Number(amount) <= 0) return res.status(400).json({ error: 'amount must be greater than 0' });
+
+  // Resolve or create supplier
+  let supplierId = supplier_id || null;
+  if (!supplierId && new_supplier_name) {
+    const { data: sup, error: supErr } = await supabase.from('cst_vendors').insert({
+      name: new_supplier_name, role_type: 'vendor', site_id
+    }).select().single();
+    if (supErr) return res.status(500).json({ error: supErr.message });
+    supplierId = sup.id;
+  }
+
+  // Resolve or create store item
+  let item;
+  if (item_id) {
+    const { data, error: itemErr } = await supabase.from('cst_store_items').select('*').eq('id', item_id).single();
+    if (itemErr || !data) return res.status(404).json({ error: 'Material not found' });
+    item = data;
+  } else if (new_item_name) {
+    if (!new_item_unit) return res.status(400).json({ error: 'unit is required for a new material' });
+    const { data, error: createErr } = await supabase.from('cst_store_items').insert({
+      site_id, name: new_item_name, unit: new_item_unit, quantity_in_stock: 0, created_by: req.user.id
+    }).select().single();
+    if (createErr) {
+      if (createErr.message.includes('duplicate')) return res.status(409).json({ error: 'A material with this name already exists — pick it from the list instead' });
+      return res.status(500).json({ error: createErr.message });
+    }
+    item = data;
+  } else {
+    return res.status(400).json({ error: 'Select an existing material or provide a new material name and unit' });
+  }
+
+  // Stock in
+  const newQty = Number(item.quantity_in_stock) + Number(quantity);
+  await supabase.from('cst_store_items').update({ quantity_in_stock: newQty, updated_at: new Date().toISOString() }).eq('id', item.id);
+  await supabase.from('cst_store_movements').insert({
+    item_id: item.id, site_id, movement_type: 'in', quantity, reason: 'Delivery recorded', recorded_by: req.user.id, supplier_id: supplierId
+  });
+
+  // Create the payment transaction (pending — goes through the usual manager+finance approval)
+  const desc = description || `Delivery: ${quantity} ${item.unit} of ${item.name}`;
+  const { data: txn, error: txnErr } = await supabase.from('cst_transactions').insert({
+    site_id, category: 'materials', description: desc, amount,
+    transaction_date: new Date().toISOString().slice(0, 10), created_by: req.user.id
+  }).select().single();
+  if (txnErr) return res.status(500).json({ error: txnErr.message });
+
+  if (supplierId) {
+    await supabase.from('cst_transaction_vendors').insert({
+      transaction_id: txn.id, vendor_id: supplierId, supplied_item: `${quantity} ${item.unit} of ${item.name}`
+    });
+  }
+
+  const { data: recipients } = await supabase.from('cst_users').select('id').eq('site_id', site_id).in('role', ['manager', 'finance']);
+  for (const r of (recipients || [])) await notify(r.id, txn.id, 'batch_submitted', `New delivery recorded: ${quantity} ${item.unit} of ${item.name} (KES ${Number(amount).toLocaleString()}) — awaiting approval.`);
+
+  res.status(201).json({ item: { ...item, quantity_in_stock: newQty }, transaction: txn, supplier_id: supplierId });
+});
+
+// ---------- Material reorder request (goes through normal transaction approval) ----------
+app.post('/api/store/items/:id/reorder-request', requireAuth, requireRole('clerk', 'storekeeper', 'manager', 'admin'), async (req, res) => {
+  const { quantity, estimated_amount, note } = req.body;
+  if (!quantity || Number(quantity) <= 0) return res.status(400).json({ error: 'quantity must be greater than 0' });
+  if (!estimated_amount || Number(estimated_amount) <= 0) return res.status(400).json({ error: 'estimated_amount must be greater than 0' });
+
+  const { data: item, error: itemErr } = await supabase.from('cst_store_items').select('*').eq('id', req.params.id).single();
+  if (itemErr || !item) return res.status(404).json({ error: 'Material not found' });
+
+  const description = `Reorder request: ${quantity} ${item.unit} of ${item.name}${note ? ' — ' + note : ''} (current stock: ${item.quantity_in_stock} ${item.unit})`;
+  const { data: txn, error: txnErr } = await supabase.from('cst_transactions').insert({
+    site_id: item.site_id, category: 'materials', description, amount: estimated_amount,
+    transaction_date: new Date().toISOString().slice(0, 10), created_by: req.user.id
+  }).select().single();
+  if (txnErr) return res.status(500).json({ error: txnErr.message });
+
+  const { data: recipients } = await supabase.from('cst_users').select('id').eq('site_id', item.site_id).in('role', ['manager', 'finance']);
+  for (const r of (recipients || [])) await notify(r.id, txn.id, 'batch_submitted', `Reorder request: ${quantity} ${item.unit} of ${item.name} (est. KES ${Number(estimated_amount).toLocaleString()}) — awaiting approval.`);
+
+  res.status(201).json(txn);
 });
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
