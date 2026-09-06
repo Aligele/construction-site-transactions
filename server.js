@@ -385,6 +385,7 @@ function buildRegistryHtml(user){
   if (user.role==='finance' || user.role==='manager' || user.role==='admin') {
     html += '<div class="card"><div class="topbar"><h2>Weekly wages</h2><div><label style="display:inline;margin-right:6px;">Week starting</label><input id="wagesWeekStart" type="date" /></div></div><div id="weeklyWages"><div class="skeleton" style="width:85%;"></div><div class="skeleton" style="width:60%;"></div></div><div style="margin-top:10px;text-align:left;">'+(['finance','admin'].includes(user.role)?'<button class="success" id="payAllWagesBtn">Pay all wages</button> ':'')+'<button class="success" id="downloadWagesBtn">Download Excel</button></div><div class="error" id="payWagesErr"></div><div class="muted" id="payWagesOk"></div></div>';
   }
+  html += '<div class="card"><h2>Weekly attendance report</h2><p class="muted">Present shown in green, absent in red — printable at the end of the week.</p><div class="row"><div><label>Week starting</label><input id="attReportWeekStart" type="date" /></div></div><div style="margin-top:12px;"><button class="success" id="downloadAttendanceReportBtn">Download PDF report</button></div></div>';
   return html;
 }
 function buildNotificationsHtml(user){
@@ -584,6 +585,23 @@ async function renderDashboard(){
       dateInput.value = new Date().toISOString().slice(0,10);
       dateInput.onchange = loadWorkerAttendanceView;
       loadWorkerAttendanceView();
+    }
+    if (document.getElementById('downloadAttendanceReportBtn')) {
+      const wsInput = document.getElementById('attReportWeekStart');
+      const today = new Date();
+      const day = today.getDay();
+      const diffToMonday = day === 0 ? 6 : day - 1;
+      const monday = new Date(today);
+      monday.setDate(today.getDate() - diffToMonday);
+      wsInput.value = monday.toISOString().slice(0,10);
+      document.getElementById('downloadAttendanceReportBtn').onclick = () => {
+        const start = document.getElementById('attReportWeekStart').value;
+        fetch(API+'/registry/attendance-report.pdf?start='+start, {headers:{Authorization:'Bearer '+state.token}})
+          .then(r=>r.blob()).then(blob=>{
+            const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href=url;
+            a.download = 'attendance-report-'+start+'.pdf'; a.click();
+          });
+      };
     }
     if (document.getElementById('weeklyWages')) {
       const wsInput = document.getElementById('wagesWeekStart');
@@ -2347,6 +2365,102 @@ app.get('/api/store/items', requireAuth, async (req, res) => {
     const withTotals = await getStoreItemsWithTotals(req);
     res.json(withTotals);
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/registry/attendance-report.pdf', requireAuth, async (req, res) => {
+  try {
+    const start = req.query.start || (() => {
+      const d = new Date();
+      const day = d.getDay();
+      const diffToMonday = day === 0 ? 6 : day - 1;
+      d.setDate(d.getDate() - diffToMonday);
+      return d.toISOString().slice(0, 10);
+    })();
+    const startDate = new Date(start);
+    const dayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    const days = dayLabels.map((label, i) => {
+      const d = new Date(startDate);
+      d.setDate(startDate.getDate() + i);
+      return { label, date: d.toISOString().slice(0, 10) };
+    });
+    const endStr = days[6].date;
+
+    let workerQuery = supabase.from('cst_workers').select('*').order('name');
+    if (req.user.role !== 'admin') workerQuery = workerQuery.eq('site_id', req.user.site_id);
+    const { data: workers } = await workerQuery;
+
+    let attQuery = supabase.from('cst_attendance').select('worker_id, attendance_date').gte('attendance_date', start).lte('attendance_date', endStr);
+    if (req.user.role !== 'admin') attQuery = attQuery.eq('site_id', req.user.site_id);
+    const { data: attendance } = await attQuery;
+
+    const presentSet = new Set((attendance || []).map(a => a.worker_id + '_' + a.attendance_date));
+
+    const doc = new PDFDocument({ margin: 40, size: 'A4' });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="attendance-report-${start}-to-${endStr}.pdf"`);
+    doc.pipe(res);
+
+    drawFormHeader(doc, 'Weekly Attendance Report', 'Construction Portal');
+    const infoBottom = drawInfoBox(doc, 130, [
+      `Week: ${start} to ${endStr}`,
+      `Total workers: ${(workers || []).length}`
+    ]);
+
+    if (!workers || !workers.length) {
+      doc.font('Helvetica').fontSize(11).fillColor('#555').text('No workers enrolled yet.', PDF_LEFT, infoBottom + 20);
+    } else {
+      const nameW = 105, desigW = 65, dayW = (PDF_RIGHT - PDF_LEFT - nameW - desigW - 40) / 7, totalW = 40;
+      const headerH = 24, rowH = 22;
+      let y = infoBottom + 16;
+      const tableTop = y;
+
+      // Header row
+      doc.rect(PDF_LEFT, y, PDF_RIGHT - PDF_LEFT, headerH).fillAndStroke('#e2f1e8', PDF_FOREST);
+      doc.font('Helvetica-Bold').fontSize(8).fillColor(PDF_FOREST);
+      let x = PDF_LEFT;
+      doc.text('Name', x + 4, y + 8, { width: nameW - 8 }); x += nameW;
+      doc.text('Designation', x + 4, y + 8, { width: desigW - 8 }); x += desigW;
+      days.forEach(d => { doc.text(d.label, x + 2, y + 8, { width: dayW - 4, align: 'center' }); x += dayW; });
+      doc.text('Days', x + 2, y + 8, { width: totalW - 4, align: 'center' });
+      y += headerH;
+
+      workers.forEach(w => {
+        let daysPresent = 0;
+        let rowX = PDF_LEFT;
+        doc.rect(PDF_LEFT, y, PDF_RIGHT - PDF_LEFT, rowH).strokeColor('#ddd').stroke();
+        doc.font('Helvetica').fontSize(8.5).fillColor('#222');
+        doc.text(w.name, rowX + 4, y + 6, { width: nameW - 8 }); rowX += nameW;
+        doc.text(w.designation, rowX + 4, y + 6, { width: desigW - 8 }); rowX += desigW;
+        days.forEach(d => {
+          const present = presentSet.has(w.id + '_' + d.date);
+          if (present) daysPresent++;
+          doc.rect(rowX + 2, y + 3, dayW - 4, rowH - 6).fill(present ? '#dfeee5' : '#f6e2e2');
+          doc.fillColor(present ? '#2f7d4f' : '#b03a3a').font('Helvetica-Bold').fontSize(8)
+            .text(present ? 'P' : 'A', rowX + 2, y + 7, { width: dayW - 4, align: 'center' });
+          rowX += dayW;
+        });
+        doc.fillColor('#222').font('Helvetica-Bold').fontSize(8.5).text(String(daysPresent), rowX + 2, y + 6, { width: totalW - 4, align: 'center' });
+        y += rowH;
+      });
+
+      // Outer border for whole table
+      doc.rect(PDF_LEFT, tableTop, PDF_RIGHT - PDF_LEFT, y - tableTop).strokeColor(PDF_FOREST).lineWidth(1.2).stroke();
+      doc.lineWidth(1);
+
+      // Legend
+      y += 16;
+      doc.rect(PDF_LEFT, y, 12, 12).fill('#dfeee5');
+      doc.fillColor('#2f7d4f').font('Helvetica-Bold').fontSize(9).text('P', PDF_LEFT + 2, y + 2);
+      doc.fillColor('#333').font('Helvetica').fontSize(9).text('Present', PDF_LEFT + 18, y + 2);
+      doc.rect(PDF_LEFT + 90, y, 12, 12).fill('#f6e2e2');
+      doc.fillColor('#b03a3a').font('Helvetica-Bold').fontSize(9).text('A', PDF_LEFT + 92, y + 2);
+      doc.fillColor('#333').font('Helvetica').fontSize(9).text('Absent', PDF_LEFT + 108, y + 2);
+
+      drawFormFooter(doc, y + 30, 'Generated automatically from daily attendance records.');
+    }
+
+    doc.end();
+  } catch (e) { res.status(500).send('Could not generate report: ' + e.message); }
 });
 
 app.get('/api/store/report.pdf', requireAuth, async (req, res) => {
