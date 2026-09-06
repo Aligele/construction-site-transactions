@@ -436,7 +436,7 @@ async function renderDashboard(){
         (['manager','finance','admin'].includes(user.role) ? '<a class="nav-item" id="navSuppliers" data-view="suppliers"><span class="nav-icon">&#127981;</span> Suppliers</a>' : '') +
         (['clerk','finance','manager','admin'].includes(user.role) ? '<a class="nav-item" id="navTransactions" data-view="transactions"><span class="nav-icon">&#128203;</span> Transactions</a>' : '') +
         (['clerk','finance','manager','admin'].includes(user.role) ? '<a class="nav-item" id="navRegistry" data-view="registry"><span class="nav-icon">&#128101;</span> Registry</a>' : '') +
-        (['storekeeper','finance','manager','admin'].includes(user.role) ? '<a class="nav-item" id="navStore" data-view="store"><span class="nav-icon">&#128230;</span> Store</a>' : '') +
+        (['storekeeper','clerk','finance','manager','admin'].includes(user.role) ? '<a class="nav-item" id="navStore" data-view="store"><span class="nav-icon">&#128230;</span> Store</a>' : '') +
         '<div class="nav-section-label">ACCOUNT</div>' +
         '<a class="nav-item" id="navNotifications" data-view="notifications"><span class="nav-icon">&#128276;</span> Notifications</a>' +
         '<a class="nav-item" id="navSettings" data-view="settings"><span class="nav-icon">&#9881;</span> Settings</a>' +
@@ -970,12 +970,23 @@ async function toggleSupplierDetails(id){
   const body = document.getElementById('supplier-details-body-'+id);
   body.innerHTML = '<div class="skeleton" style="width:70%;"></div>';
   try {
-    const txns = await api('/suppliers/'+id+'/transactions');
-    if (!txns.length) { body.innerHTML = '<span class="muted">Nothing supplied/linked yet — assign this supplier to a transaction under that transaction\\'s Details panel.</span>'; return; }
-    body.innerHTML = '<strong>What has been supplied</strong><table style="margin-top:6px;"><thead><tr><th>Date</th><th>Supplied</th><th>Category</th><th>Amount</th><th>Status</th></tr></thead><tbody>' +
+    const [txns, deliveries] = await Promise.all([
+      api('/suppliers/'+id+'/transactions'),
+      api('/suppliers/'+id+'/deliveries')
+    ]);
+    let html = '';
+    html += '<strong>Deliveries to site</strong>';
+    html += deliveries.length ? '<table style="margin-top:6px;margin-bottom:14px;"><thead><tr><th>Date</th><th>Material</th><th>Quantity</th><th>Recorded by</th><th>Note</th></tr></thead><tbody>' +
+      deliveries.map(d => '<tr><td>'+new Date(d.created_at).toLocaleDateString()+'</td><td>'+d.item.name+'</td><td>'+d.quantity+' '+d.item.unit+'</td><td class="muted">'+(d.recorder?d.recorder.full_name:'—')+'</td><td class="muted">'+(d.reason||'')+'</td></tr>').join('') +
+      '</tbody></table>' : '<div class="muted" style="margin-bottom:14px;">No deliveries recorded yet — record one under Store, "Stock in (delivery)".</div>';
+
+    html += '<strong>Linked transactions</strong>';
+    html += txns.length ? '<table style="margin-top:6px;"><thead><tr><th>Date</th><th>Supplied</th><th>Category</th><th>Amount</th><th>Status</th></tr></thead><tbody>' +
       txns.map(t => '<tr><td>'+t.transaction_date+'</td><td>'+(t.supplied_item?'<strong>'+t.supplied_item+'</strong><br/><span class="muted">'+t.description+'</span>':t.description)+'</td><td>'+t.category+'</td><td>'+money(t.amount)+'</td><td>'+badge(t.status)+'</td></tr>').join('') +
-      '</tbody></table>';
-  } catch(e) { body.textContent = 'Could not load supplier transactions.'; }
+      '</tbody></table>' : '<div class="muted">Nothing linked yet — assign this supplier under a transaction\\'s Details panel.</div>';
+
+    body.innerHTML = html;
+  } catch(e) { body.textContent = 'Could not load supplier details.'; }
 }
 async function loadAnalytics(){
   try {
@@ -1126,6 +1137,7 @@ async function loadDocuments(){
 async function loadStoreItems(){
   const el = document.getElementById('storeList');
   const canManage = ['storekeeper','manager','admin'].includes(state.user.role);
+  const canReceive = ['storekeeper','clerk','manager','admin'].includes(state.user.role);
   const canDelete = ['manager','admin'].includes(state.user.role);
   try {
     const items = await api('/store/items');
@@ -1134,18 +1146,37 @@ async function loadStoreItems(){
       items.map(i => {
         const low = i.reorder_level && Number(i.quantity_in_stock) <= Number(i.reorder_level);
         return '<tr><td>'+i.name+'</td><td>'+i.total_in+' '+i.unit+'</td><td>'+i.total_out+' '+i.unit+'</td><td>'+(low?'<span class="badge rejected">':'<strong>')+i.quantity_in_stock+' '+i.unit+(low?'</span>':'</strong>')+'</td><td>'+(i.reorder_level||'—')+'</td>' +
-          '<td class="actions">'+(canManage?'<button class="success" data-move-in="'+i.id+'">Stock in</button> <button class="danger" data-move-out="'+i.id+'">Stock out</button>':'')+(canDelete?' <button class="secondary" data-del-item="'+i.id+'">Remove</button>':'')+'</td></tr>';
+          '<td class="actions">'+(canReceive?'<button class="success" data-move-in="'+i.id+'">Stock in (delivery)</button> ':'')+(canManage?'<button class="danger" data-move-out="'+i.id+'">Stock out</button>':'')+(canDelete?' <button class="secondary" data-del-item="'+i.id+'">Remove</button>':'')+'</td></tr>';
       }).join('') +
       '</tbody></table>';
 
-    el.querySelectorAll('[data-move-in],[data-move-out]').forEach(btn => {
+    let suppliers = [];
+    if (canReceive) { try { suppliers = (await api('/vendors')).filter(v => v.role_type === 'vendor'); } catch {} }
+
+    el.querySelectorAll('[data-move-in]').forEach(btn => {
       btn.onclick = async () => {
-        const id = btn.dataset.moveIn || btn.dataset.moveOut;
-        const movement_type = btn.dataset.moveIn ? 'in' : 'out';
-        const quantity = prompt('Quantity to record ' + (movement_type==='in'?'IN (received)':'OUT (used/issued)') + ':');
+        const id = btn.dataset.moveIn;
+        const quantity = prompt('Quantity received (delivered):');
+        if (!quantity) return;
+        let supplier_id = null;
+        if (suppliers.length) {
+          const list = suppliers.map((s,i) => (i+1)+'. '+s.name).join('\\n');
+          const pick = prompt('Which supplier delivered this? Type the number, or leave blank if none:\\n'+list);
+          const idx = parseInt(pick);
+          if (!isNaN(idx) && suppliers[idx-1]) supplier_id = suppliers[idx-1].id;
+        }
+        const reason = prompt('Note (optional, e.g. delivery note number):') || '';
+        try { await api('/store/items/'+id+'/movement', {method:'POST', body: JSON.stringify({movement_type:'in', quantity, reason, supplier_id})}); loadStoreItems(); }
+        catch(e){ alert(e.message); }
+      };
+    });
+    el.querySelectorAll('[data-move-out]').forEach(btn => {
+      btn.onclick = async () => {
+        const id = btn.dataset.moveOut;
+        const quantity = prompt('Quantity to record OUT (used/issued):');
         if (!quantity) return;
         const reason = prompt('Reason / note (optional):') || '';
-        try { await api('/store/items/'+id+'/movement', {method:'POST', body: JSON.stringify({movement_type, quantity, reason})}); loadStoreItems(); }
+        try { await api('/store/items/'+id+'/movement', {method:'POST', body: JSON.stringify({movement_type:'out', quantity, reason})}); loadStoreItems(); }
         catch(e){ alert(e.message); }
       };
     });
@@ -2309,9 +2340,10 @@ app.delete('/api/store/items/:id', requireAuth, requireRole('manager', 'admin'),
   res.json({ ok: true });
 });
 
-app.post('/api/store/items/:id/movement', requireAuth, requireRole('storekeeper', 'manager', 'admin'), async (req, res) => {
-  const { movement_type, quantity, reason } = req.body;
+app.post('/api/store/items/:id/movement', requireAuth, requireRole('storekeeper', 'clerk', 'manager', 'admin'), async (req, res) => {
+  const { movement_type, quantity, reason, supplier_id } = req.body;
   if (!['in', 'out'].includes(movement_type)) return res.status(400).json({ error: 'movement_type must be "in" or "out"' });
+  if (req.user.role === 'clerk' && movement_type !== 'in') return res.status(403).json({ error: 'Clerks can only record deliveries (stock in), not stock out' });
   if (!quantity || Number(quantity) <= 0) return res.status(400).json({ error: 'quantity must be greater than 0' });
 
   const { data: item, error: itemErr } = await supabase.from('cst_store_items').select('*').eq('id', req.params.id).single();
@@ -2324,7 +2356,8 @@ app.post('/api/store/items/:id/movement', requireAuth, requireRole('storekeeper'
   if (updErr) return res.status(500).json({ error: updErr.message });
 
   const { data: movement, error: movErr } = await supabase.from('cst_store_movements').insert({
-    item_id: item.id, site_id: item.site_id, movement_type, quantity, reason: reason || null, recorded_by: req.user.id
+    item_id: item.id, site_id: item.site_id, movement_type, quantity, reason: reason || null, recorded_by: req.user.id,
+    supplier_id: movement_type === 'in' ? (supplier_id || null) : null
   }).select().single();
   if (movErr) return res.status(500).json({ error: movErr.message });
 
@@ -2462,6 +2495,12 @@ app.delete('/api/suppliers/:id', requireAuth, requireRole('manager', 'admin'), a
   const { error } = await supabase.from('cst_vendors').delete().eq('id', req.params.id);
   if (error) return res.status(500).json({ error: error.message });
   res.json({ ok: true });
+});
+
+app.get('/api/suppliers/:id/deliveries', requireAuth, requireRole('manager', 'finance', 'admin'), async (req, res) => {
+  const { data: movements, error } = await supabase.from('cst_store_movements').select('*, item:item_id(name, unit), recorder:recorded_by(full_name)').eq('supplier_id', req.params.id).order('created_at', { ascending: false });
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(movements || []);
 });
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
