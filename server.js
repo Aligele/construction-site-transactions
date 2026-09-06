@@ -936,15 +936,20 @@ function simpleBarChart(rows, maxWidth){
     '<div style="background:#eee;border-radius:6px;height:10px;overflow:hidden;"><div style="width:'+Math.max((r.value/max)*maxWidth,2)+'%;height:100%;background:'+(r.color||'#2f7d4f')+';border-radius:6px;transition:width .6s ease;"></div></div></div>'
   ).join('');
 }
+let openSupplierDetails = {};
 async function loadSuppliers(){
   const el = document.getElementById('supplierList');
   const canDelete = ['manager','admin'].includes(state.user.role);
   try {
     const suppliers = await api('/suppliers');
     if (!suppliers.length) { el.textContent = 'No suppliers added yet.'; return; }
-    el.innerHTML = '<table><thead><tr><th>Supplier</th><th>Contact</th><th>Total Paid</th><th>Total Pending</th><th>Transactions</th><th>Actions</th></tr></thead><tbody>' +
-      suppliers.map(s => '<tr><td>'+s.name+'</td><td class="muted">'+(s.contact_phone||'')+(s.contact_email?' / '+s.contact_email:'')+'</td><td style="color:#2f7d4f;font-weight:600;">'+money(s.total_paid)+'</td><td style="color:#d98c2b;font-weight:600;">'+money(s.total_pending)+'</td><td>'+s.transaction_count+'</td><td class="actions">'+(canDelete?'<button class="danger" data-del-supplier="'+s.id+'">Remove</button>':'')+'</td></tr>').join('') +
-      '</tbody></table>';
+    let html = '<table><thead><tr><th>Supplier</th><th>Contact</th><th>Total Paid</th><th>Total Pending</th><th>Transactions</th><th>Actions</th></tr></thead><tbody>';
+    suppliers.forEach(s => {
+      html += '<tr><td>'+s.name+'</td><td class="muted">'+(s.contact_phone||'')+(s.contact_email?' / '+s.contact_email:'')+'</td><td style="color:#2f7d4f;font-weight:600;">'+money(s.total_paid)+'</td><td style="color:#d98c2b;font-weight:600;">'+money(s.total_pending)+'</td><td>'+s.transaction_count+'</td><td class="actions"><button class="secondary" data-supplier-details="'+s.id+'">Details</button> '+(canDelete?'<button class="danger" data-del-supplier="'+s.id+'">Remove</button>':'')+'</td></tr>';
+      html += '<tr id="supplier-details-'+s.id+'" style="display:none;"><td colspan="6"><div id="supplier-details-body-'+s.id+'" class="muted">Loading...</div></td></tr>';
+    });
+    html += '</tbody></table>';
+    el.innerHTML = html;
     el.querySelectorAll('[data-del-supplier]').forEach(btn => {
       btn.onclick = async () => {
         if (!confirm('Remove this supplier? It will be unlinked from any transactions.')) return;
@@ -952,7 +957,24 @@ async function loadSuppliers(){
         catch(e){ alert(e.message); }
       };
     });
+    el.querySelectorAll('[data-supplier-details]').forEach(btn => {
+      btn.onclick = () => toggleSupplierDetails(btn.dataset.supplierDetails);
+    });
   } catch(e) { el.textContent = 'Could not load suppliers.'; }
+}
+async function toggleSupplierDetails(id){
+  const row = document.getElementById('supplier-details-'+id);
+  if (openSupplierDetails[id]) { row.style.display='none'; openSupplierDetails[id]=false; return; }
+  row.style.display='table-row'; openSupplierDetails[id]=true;
+  const body = document.getElementById('supplier-details-body-'+id);
+  body.innerHTML = '<div class="skeleton" style="width:70%;"></div>';
+  try {
+    const txns = await api('/suppliers/'+id+'/transactions');
+    if (!txns.length) { body.innerHTML = '<span class="muted">Nothing supplied/linked yet — assign this supplier to a transaction under that transaction\\'s Details panel.</span>'; return; }
+    body.innerHTML = '<strong>What has been supplied</strong><table style="margin-top:6px;"><thead><tr><th>Date</th><th>Category</th><th>Description</th><th>Amount</th><th>Status</th></tr></thead><tbody>' +
+      txns.map(t => '<tr><td>'+t.transaction_date+'</td><td>'+t.category+'</td><td>'+t.description+'</td><td>'+money(t.amount)+'</td><td>'+badge(t.status)+'</td></tr>').join('') +
+      '</tbody></table>';
+  } catch(e) { body.textContent = 'Could not load supplier transactions.'; }
 }
 async function loadAnalytics(){
   try {
