@@ -1234,10 +1234,20 @@ async function loadStoreItems(){
       items.map(i => {
         const low = i.reorder_level && Number(i.quantity_in_stock) <= Number(i.reorder_level);
         return '<tr><td>'+i.name+'</td><td>'+i.total_in+' '+i.unit+'</td><td>'+i.total_out+' '+i.unit+'</td><td>'+(low?'<span class="badge rejected">':'<strong>')+i.quantity_in_stock+' '+i.unit+(low?'</span>':'</strong>')+'</td><td>'+(i.reorder_level||'—')+'</td>' +
-          '<td class="actions">'+(low&&canReceive?'<button class="success" data-reorder="'+i.id+'">Request reorder</button> ':'')+(canManage?'<button class="danger" data-move-out="'+i.id+'">Stock out</button>':'')+(canDelete?' <button class="secondary" data-del-item="'+i.id+'">Remove</button>':'')+'</td></tr>';
+          '<td class="actions">'+(canManage?'<button class="success" data-move-in="'+i.id+'">Stock in</button> ':'')+(low&&canReceive?'<button class="secondary" data-reorder="'+i.id+'">Request reorder</button> ':'')+(canManage?'<button class="danger" data-move-out="'+i.id+'">Stock out</button>':'')+(canDelete?' <button class="secondary" data-del-item="'+i.id+'">Remove</button>':'')+'</td></tr>';
       }).join('') +
       '</tbody></table>';
 
+    el.querySelectorAll('[data-move-in]').forEach(btn => {
+      btn.onclick = async () => {
+        const id = btn.dataset.moveIn;
+        const quantity = prompt('Quantity to add to stock (e.g. a count correction, or a delivery with no cost to track):');
+        if (!quantity) return;
+        const reason = prompt('Reason / note (optional):') || '';
+        try { await api('/store/items/'+id+'/movement', {method:'POST', body: JSON.stringify({movement_type:'in', quantity, reason})}); loadStoreItems(); }
+        catch(e){ alert(e.message); }
+      };
+    });
     el.querySelectorAll('[data-reorder]').forEach(btn => {
       btn.onclick = async () => {
         const id = btn.dataset.reorder;
