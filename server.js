@@ -351,7 +351,12 @@ function renderLogin(){
 }
 function buildOverviewHtml(user){
   const canExport = ['manager','finance','admin'].includes(user.role);
-  return '<div class="card"><div class="topbar"><h2>Overview</h2>'+(canExport?'<button class="success" id="overviewExportBtn">Download Excel</button>':'')+'</div><div id="summaryBox"><div class="skeleton" style="width:90%;"></div><div class="skeleton" style="width:70%;"></div><div class="skeleton" style="width:80%;"></div></div></div>';
+  let html = '<div class="card"><div class="topbar"><h2>Overview</h2>'+(canExport?'<button class="success" id="overviewExportBtn">Download Excel</button>':'')+'</div><div id="summaryBox"><div class="skeleton" style="width:90%;"></div><div class="skeleton" style="width:70%;"></div><div class="skeleton" style="width:80%;"></div></div></div>';
+  if (['finance','manager','admin'].includes(user.role)) {
+    html += '<div class="card"><h2>Waiting for approval</h2><p class="muted">Pending transactions that need a manager and/or finance sign-off.</p><div id="queuePending"><div class="skeleton" style="width:80%;"></div></div></div>';
+    html += '<div class="card"><h2>Waiting for payment</h2><p class="muted">Fully approved — ready for finance to settle.</p><div id="queueApproved"><div class="skeleton" style="width:80%;"></div></div></div>';
+  }
+  return html;
 }
 function buildTransactionsHtml(user){
   let html = '';
@@ -395,9 +400,12 @@ function buildSettingsHtml(user){
 }
 
 function buildStoreHtml(user){
-  const canManage = ['storekeeper','manager','admin'].includes(user.role);
-  const canReceive = ['storekeeper','clerk','manager','admin'].includes(user.role);
+  const canManage = ['storekeeper','admin'].includes(user.role);
+  const canReceive = ['storekeeper','admin'].includes(user.role);
   let html = '';
+  if (['manager','finance'].includes(user.role)) {
+    html += '<div class="card"><p class="muted">You have view access here — the storekeeper records deliveries and stock changes. This is the record of what suppliers have brought to site and what\\'s owed.</p></div>';
+  }
   if (canReceive) {
     html += '<div class="card"><h2>Record a delivery</h2><p class="muted">When a supplier brings materials to site, record it all in one go — the supplier, what they brought, and what you owe them. This creates a pending payment for manager and finance to approve.</p>' +
       '<div class="row"><div><label>Supplier (existing)</label><select id="dv_supplier"><option value="">— or type a new one below —</option></select></div><div><label>New supplier name</label><input id="dv_new_supplier" placeholder="Only if not in the list" /></div></div>' +
@@ -445,7 +453,7 @@ async function renderDashboard(){
         (['manager','finance','admin'].includes(user.role) ? '<a class="nav-item" id="navSuppliers" data-view="suppliers"><span class="nav-icon">&#127981;</span> Suppliers</a>' : '') +
         (['clerk','finance','manager','admin'].includes(user.role) ? '<a class="nav-item" id="navTransactions" data-view="transactions"><span class="nav-icon">&#128203;</span> Transactions</a>' : '') +
         (['clerk','finance','manager','admin'].includes(user.role) ? '<a class="nav-item" id="navRegistry" data-view="registry"><span class="nav-icon">&#128101;</span> Registry</a>' : '') +
-        (['storekeeper','clerk','finance','manager','admin'].includes(user.role) ? '<a class="nav-item" id="navStore" data-view="store"><span class="nav-icon">&#128230;</span> Store</a>' : '') +
+        (['storekeeper','finance','manager','admin'].includes(user.role) ? '<a class="nav-item" id="navStore" data-view="store"><span class="nav-icon">&#128230;</span> Store</a>' : '') +
         '<div class="nav-section-label">ACCOUNT</div>' +
         '<a class="nav-item" id="navNotifications" data-view="notifications"><span class="nav-icon">&#128276;</span> Notifications</a>' +
         '<a class="nav-item" id="navSettings" data-view="settings"><span class="nav-icon">&#9881;</span> Settings</a>' +
@@ -492,6 +500,7 @@ async function renderDashboard(){
 
   function wireContent(){
     if (document.getElementById('summaryBox')) loadSummary();
+    if (document.getElementById('queuePending')) loadApprovalQueues();
     if (document.getElementById('notifList')) loadNotifications();
     if (document.getElementById('userList')) loadUsers();
     if (document.getElementById('storeList')) loadStoreItems();
@@ -1068,6 +1077,45 @@ async function loadAnalytics(){
     });
   }
 }
+async function loadApprovalQueues(){
+  const user = state.user;
+  const canApproveManager = ['manager','admin'].includes(user.role);
+  const canApproveFinance = ['finance','admin'].includes(user.role);
+  try {
+    const { rows } = await api('/transactions?status=pending&limit=100');
+    const pendingEl = document.getElementById('queuePending');
+    if (!rows.length) { pendingEl.textContent = 'Nothing waiting for approval.'; }
+    else {
+      pendingEl.innerHTML = '<table><thead><tr><th>Date</th><th>Category</th><th>Description</th><th>Amount</th><th>Status</th><th>Actions</th></tr></thead><tbody>' +
+        rows.map(t => {
+          let actions = '';
+          if (canApproveManager && !t.manager_approved) actions += '<button class="success" data-q-action="approve/manager" data-q-id="'+t.id+'">Approve (Mgr)</button> ';
+          if (canApproveFinance && !t.finance_approved) actions += '<button class="success" data-q-action="approve/finance" data-q-id="'+t.id+'">Approve (Fin)</button> ';
+          actions += '<button class="danger" data-q-action="reject" data-q-id="'+t.id+'">Reject</button>';
+          return '<tr><td>'+t.transaction_date+'</td><td>'+t.category+'</td><td>'+t.description+'</td><td>'+money(t.amount)+'</td><td>'+(t.manager_approved?'Mgr &check; ':'')+(t.finance_approved?'Fin &check;':'')+'</td><td class="actions">'+actions+'</td></tr>';
+        }).join('') + '</tbody></table>';
+    }
+
+    const { rows: approvedRows } = await api('/transactions?status=approved&limit=100');
+    const approvedEl = document.getElementById('queueApproved');
+    if (!approvedRows.length) { approvedEl.textContent = 'Nothing waiting for payment.'; }
+    else {
+      approvedEl.innerHTML = '<table><thead><tr><th>Date</th><th>Category</th><th>Description</th><th>Amount</th><th>Actions</th></tr></thead><tbody>' +
+        approvedRows.map(t => '<tr><td>'+t.transaction_date+'</td><td>'+t.category+'</td><td>'+t.description+'</td><td>'+money(t.amount)+'</td><td class="actions">'+(canApproveFinance?'<button data-q-action="pay" data-q-id="'+t.id+'">Mark Paid</button>':'<span class="muted">Awaiting finance</span>')+'</td></tr>').join('') +
+        '</tbody></table>';
+    }
+
+    document.querySelectorAll('[data-q-action]').forEach(btn => {
+      btn.onclick = async () => {
+        try { await api('/transactions/'+btn.dataset.qId+'/'+btn.dataset.qAction, {method:'POST', body: JSON.stringify({})}); loadApprovalQueues(); loadSummary(); }
+        catch(e){ alert(e.message); }
+      };
+    });
+  } catch(e) {
+    document.getElementById('queuePending').textContent = 'Could not load.';
+    if (document.getElementById('queueApproved')) document.getElementById('queueApproved').textContent = 'Could not load.';
+  }
+}
 async function loadSummary(){
   const el = document.getElementById('summaryBox');
   try {
@@ -1176,9 +1224,9 @@ async function loadDocuments(){
 }
 async function loadStoreItems(){
   const el = document.getElementById('storeList');
-  const canManage = ['storekeeper','manager','admin'].includes(state.user.role);
-  const canReceive = ['storekeeper','clerk','manager','admin'].includes(state.user.role);
-  const canDelete = ['manager','admin'].includes(state.user.role);
+  const canManage = ['storekeeper','admin'].includes(state.user.role);
+  const canReceive = ['storekeeper','admin'].includes(state.user.role);
+  const canDelete = ['storekeeper','admin'].includes(state.user.role);
   try {
     const items = await api('/store/items');
     if (!items.length) { el.textContent = 'No materials tracked yet.'; return; }
@@ -2346,7 +2394,7 @@ app.get('/api/store/report.pdf', requireAuth, async (req, res) => {
   } catch (e) { res.status(500).send('Could not generate report: ' + e.message); }
 });
 
-app.post('/api/store/items', requireAuth, requireRole('storekeeper', 'manager', 'admin'), async (req, res) => {
+app.post('/api/store/items', requireAuth, requireRole('storekeeper', 'admin'), async (req, res) => {
   const { name, unit, reorder_level, initial_quantity } = req.body;
   if (!name || !unit) return res.status(400).json({ error: 'name and unit are required' });
   const site_id = req.user.site_id;
@@ -2368,13 +2416,13 @@ app.post('/api/store/items', requireAuth, requireRole('storekeeper', 'manager', 
   res.status(201).json(data);
 });
 
-app.delete('/api/store/items/:id', requireAuth, requireRole('manager', 'admin'), async (req, res) => {
+app.delete('/api/store/items/:id', requireAuth, requireRole('storekeeper', 'admin'), async (req, res) => {
   const { error } = await supabase.from('cst_store_items').delete().eq('id', req.params.id);
   if (error) return res.status(500).json({ error: error.message });
   res.json({ ok: true });
 });
 
-app.post('/api/store/items/:id/movement', requireAuth, requireRole('storekeeper', 'clerk', 'manager', 'admin'), async (req, res) => {
+app.post('/api/store/items/:id/movement', requireAuth, requireRole('storekeeper', 'admin'), async (req, res) => {
   const { movement_type, quantity, reason, supplier_id } = req.body;
   if (!['in', 'out'].includes(movement_type)) return res.status(400).json({ error: 'movement_type must be "in" or "out"' });
   if (req.user.role === 'clerk' && movement_type !== 'in') return res.status(403).json({ error: 'Clerks can only record deliveries (stock in), not stock out' });
@@ -2538,7 +2586,7 @@ app.get('/api/suppliers/:id/deliveries', requireAuth, requireRole('manager', 'fi
 });
 
 // ---------- Combined delivery recording: supplier + materials + payment, all at once ----------
-app.post('/api/deliveries', requireAuth, requireRole('clerk', 'storekeeper', 'manager', 'admin'), async (req, res) => {
+app.post('/api/deliveries', requireAuth, requireRole('storekeeper', 'admin'), async (req, res) => {
   const { supplier_id, new_supplier_name, item_id, new_item_name, new_item_unit, quantity, amount, description } = req.body;
   const site_id = req.user.site_id;
   if (!site_id) return res.status(400).json({ error: 'Your account has no site associated with it' });
@@ -2603,7 +2651,7 @@ app.post('/api/deliveries', requireAuth, requireRole('clerk', 'storekeeper', 'ma
 });
 
 // ---------- Material reorder request (goes through normal transaction approval) ----------
-app.post('/api/store/items/:id/reorder-request', requireAuth, requireRole('clerk', 'storekeeper', 'manager', 'admin'), async (req, res) => {
+app.post('/api/store/items/:id/reorder-request', requireAuth, requireRole('storekeeper', 'admin'), async (req, res) => {
   const { quantity, estimated_amount, note } = req.body;
   if (!quantity || Number(quantity) <= 0) return res.status(400).json({ error: 'quantity must be greater than 0' });
   if (!estimated_amount || Number(estimated_amount) <= 0) return res.status(400).json({ error: 'estimated_amount must be greater than 0' });
