@@ -417,6 +417,12 @@ function buildAnalyticsHtml(user){
   return html;
 }
 
+function buildSuppliersHtml(user){
+  let html = '<div class="card"><h2>Add a supplier</h2><div class="row"><div><label>Supplier name</label><input id="sup_name" placeholder="Company or person name" /></div><div><label>Phone</label><input id="sup_phone" placeholder="07xxxxxxxx" /></div><div><label>Email</label><input id="sup_email" type="email" placeholder="optional" /></div></div><div style="margin-top:12px;"><button id="addSupplierBtn">Add supplier</button></div><div class="error" id="addSupplierErr"></div></div>';
+  html += '<div class="card"><h2>Suppliers & their payments</h2><div id="supplierList"><div class="skeleton" style="width:85%;"></div><div class="skeleton" style="width:60%;"></div></div></div>';
+  return html;
+}
+
 async function renderDashboard(){
   const {user} = state;
   appEl.innerHTML =
@@ -427,6 +433,7 @@ async function renderDashboard(){
         '<div class="nav-section-label">MAIN</div>' +
         (['manager','finance','admin'].includes(user.role) ? '<a class="nav-item" id="navDashboard" data-view="dashboard"><span class="nav-icon">&#8962;</span> Dashboard</a>' : '') +
         (['manager','finance','admin'].includes(user.role) ? '<a class="nav-item" id="navAnalytics" data-view="analytics"><span class="nav-icon">&#128202;</span> Analytics</a>' : '') +
+        (['manager','finance','admin'].includes(user.role) ? '<a class="nav-item" id="navSuppliers" data-view="suppliers"><span class="nav-icon">&#127981;</span> Suppliers</a>' : '') +
         (['clerk','finance','manager','admin'].includes(user.role) ? '<a class="nav-item" id="navTransactions" data-view="transactions"><span class="nav-icon">&#128203;</span> Transactions</a>' : '') +
         (['clerk','finance','manager','admin'].includes(user.role) ? '<a class="nav-item" id="navRegistry" data-view="registry"><span class="nav-icon">&#128101;</span> Registry</a>' : '') +
         (['storekeeper','finance','manager','admin'].includes(user.role) ? '<a class="nav-item" id="navStore" data-view="store"><span class="nav-icon">&#128230;</span> Store</a>' : '') +
@@ -463,6 +470,7 @@ async function renderDashboard(){
     else if (view === 'settings') html = buildSettingsHtml(user);
     else if (view === 'store') html = buildStoreHtml(user);
     else if (view === 'analytics') html = buildAnalyticsHtml(user);
+    else if (view === 'suppliers') html = buildSuppliersHtml(user);
     content.innerHTML = html;
     wireContent();
     closeSidebar();
@@ -479,6 +487,21 @@ async function renderDashboard(){
     if (document.getElementById('userList')) loadUsers();
     if (document.getElementById('storeList')) loadStoreItems();
     if (document.getElementById('analyticsStatusChart')) loadAnalytics();
+    if (document.getElementById('supplierList')) loadSuppliers();
+    if (document.getElementById('addSupplierBtn')) {
+      document.getElementById('addSupplierBtn').onclick = async () => {
+        const name = document.getElementById('sup_name').value.trim();
+        const contact_phone = document.getElementById('sup_phone').value.trim();
+        const contact_email = document.getElementById('sup_email').value.trim();
+        if (!name) { document.getElementById('addSupplierErr').textContent = 'Supplier name is required.'; return; }
+        try {
+          await api('/suppliers', {method:'POST', body: JSON.stringify({name, contact_phone, contact_email})});
+          document.getElementById('addSupplierErr').textContent = '';
+          document.getElementById('sup_name').value=''; document.getElementById('sup_phone').value=''; document.getElementById('sup_email').value='';
+          loadSuppliers();
+        } catch(e) { document.getElementById('addSupplierErr').textContent = e.message; }
+      };
+    }
     if (document.getElementById('downloadStockPdfBtn')) {
       document.getElementById('downloadStockPdfBtn').onclick = () => {
         fetch(API+'/store/report.pdf', {headers:{Authorization:'Bearer '+state.token}}).then(r=>r.blob()).then(blob=>{
@@ -912,6 +935,24 @@ function simpleBarChart(rows, maxWidth){
     '<div style="margin-bottom:8px;"><div class="muted" style="display:flex;justify-content:space-between;font-size:12px;"><span>'+r.label+'</span><span>'+money(r.value)+'</span></div>' +
     '<div style="background:#eee;border-radius:6px;height:10px;overflow:hidden;"><div style="width:'+Math.max((r.value/max)*maxWidth,2)+'%;height:100%;background:'+(r.color||'#2f7d4f')+';border-radius:6px;transition:width .6s ease;"></div></div></div>'
   ).join('');
+}
+async function loadSuppliers(){
+  const el = document.getElementById('supplierList');
+  const canDelete = ['manager','admin'].includes(state.user.role);
+  try {
+    const suppliers = await api('/suppliers');
+    if (!suppliers.length) { el.textContent = 'No suppliers added yet.'; return; }
+    el.innerHTML = '<table><thead><tr><th>Supplier</th><th>Contact</th><th>Total Paid</th><th>Total Pending</th><th>Transactions</th><th>Actions</th></tr></thead><tbody>' +
+      suppliers.map(s => '<tr><td>'+s.name+'</td><td class="muted">'+(s.contact_phone||'')+(s.contact_email?' / '+s.contact_email:'')+'</td><td style="color:#2f7d4f;font-weight:600;">'+money(s.total_paid)+'</td><td style="color:#d98c2b;font-weight:600;">'+money(s.total_pending)+'</td><td>'+s.transaction_count+'</td><td class="actions">'+(canDelete?'<button class="danger" data-del-supplier="'+s.id+'">Remove</button>':'')+'</td></tr>').join('') +
+      '</tbody></table>';
+    el.querySelectorAll('[data-del-supplier]').forEach(btn => {
+      btn.onclick = async () => {
+        if (!confirm('Remove this supplier? It will be unlinked from any transactions.')) return;
+        try { await api('/suppliers/'+btn.dataset.delSupplier, {method:'DELETE'}); loadSuppliers(); }
+        catch(e){ alert(e.message); }
+      };
+    });
+  } catch(e) { el.textContent = 'Could not load suppliers.'; }
 }
 async function loadAnalytics(){
   try {
@@ -2338,6 +2379,63 @@ app.get('/api/analytics', requireAuth, requireRole('manager', 'finance', 'admin'
 
     res.json({ financial, operational });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ---------- Suppliers (vendors with payment tracking) ----------
+app.get('/api/suppliers', requireAuth, requireRole('manager', 'finance', 'admin'), async (req, res) => {
+  let query = supabase.from('cst_vendors').select('*').eq('role_type', 'vendor').order('name');
+  if (req.user.role !== 'admin' && req.user.site_id) query = query.eq('site_id', req.user.site_id);
+  const { data: suppliers, error } = await query;
+  if (error) return res.status(500).json({ error: error.message });
+  if (!suppliers.length) return res.json([]);
+
+  const supplierIds = suppliers.map(s => s.id);
+  const { data: links } = await supabase.from('cst_transaction_vendors').select('vendor_id, transaction_id').in('vendor_id', supplierIds);
+  const txnIds = [...new Set((links || []).map(l => l.transaction_id))];
+  let txnMap = {};
+  if (txnIds.length) {
+    const { data: txns } = await supabase.from('cst_transactions').select('id, amount, status').in('id', txnIds);
+    for (const t of (txns || [])) txnMap[t.id] = t;
+  }
+
+  const result = suppliers.map(s => {
+    const myLinks = (links || []).filter(l => l.vendor_id === s.id);
+    let total_paid = 0, total_pending = 0, transaction_count = myLinks.length;
+    for (const l of myLinks) {
+      const t = txnMap[l.transaction_id];
+      if (!t) continue;
+      const amt = Number(t.amount) || 0;
+      if (t.status === 'paid') total_paid += amt;
+      else if (t.status === 'pending' || t.status === 'approved') total_pending += amt;
+    }
+    return { ...s, total_paid, total_pending, transaction_count };
+  });
+  res.json(result);
+});
+
+app.post('/api/suppliers', requireAuth, requireRole('manager', 'finance', 'admin'), async (req, res) => {
+  const { name, contact_phone, contact_email } = req.body;
+  if (!name) return res.status(400).json({ error: 'name is required' });
+  const { data, error } = await supabase.from('cst_vendors').insert({
+    name, role_type: 'vendor', contact_phone, contact_email, site_id: req.user.site_id
+  }).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.status(201).json(data);
+});
+
+app.get('/api/suppliers/:id/transactions', requireAuth, requireRole('manager', 'finance', 'admin'), async (req, res) => {
+  const { data: links, error } = await supabase.from('cst_transaction_vendors').select('transaction_id').eq('vendor_id', req.params.id);
+  if (error) return res.status(500).json({ error: error.message });
+  const txnIds = links.map(l => l.transaction_id);
+  if (!txnIds.length) return res.json([]);
+  const { data: txns } = await supabase.from('cst_transactions').select('*').in('id', txnIds).order('transaction_date', { ascending: false });
+  res.json(txns || []);
+});
+
+app.delete('/api/suppliers/:id', requireAuth, requireRole('manager', 'admin'), async (req, res) => {
+  const { error } = await supabase.from('cst_vendors').delete().eq('id', req.params.id);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
 });
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
