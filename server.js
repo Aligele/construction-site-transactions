@@ -83,6 +83,22 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SER
   auth: { autoRefreshToken: false, persistSession: false }
 });
 
+// ---------- Multi-tenancy: organization-scoped visibility ----------
+// 'admin' sees every site within their own organization (not globally).
+// 'superadmin' sees everything, across all organizations.
+// Everyone else is scoped to their own single site, as before.
+async function getOrgSiteIds(organizationId) {
+  if (!organizationId) return [];
+  const { data } = await supabase.from('cst_sites').select('id').eq('organization_id', organizationId);
+  return (data || []).map(s => s.id);
+}
+// Applies the correct site-scoping filter to a Supabase query builder, given the requesting user.
+async function scopeToSites(query, user) {
+  if (user.role === 'superadmin') return query;
+  if (user.role === 'admin') return query.in('site_id', await getOrgSiteIds(user.organization_id));
+  return user.site_id ? query.eq('site_id', user.site_id) : query;
+}
+
 // ---------- M-Pesa Daraja B2C integration ----------
 const MPESA_ENV = process.env.MPESA_ENV || 'sandbox';
 const MPESA_BASE_URL = MPESA_ENV === 'production' ? 'https://api.safaricom.co.ke' : 'https://sandbox.safaricom.co.ke';
@@ -144,7 +160,7 @@ app.use(express.json());
 // ---------- Auth helpers ----------
 function signToken(user) {
   return jwt.sign(
-    { id: user.id, role: user.role, site_id: user.site_id, full_name: user.full_name },
+    { id: user.id, role: user.role, site_id: user.site_id, organization_id: user.organization_id || null, full_name: user.full_name },
     JWT_SECRET,
     { expiresIn: '12h' }
   );
@@ -313,7 +329,11 @@ async function api(path, opts={}) {
 }
 function money(n){ return 'KES ' + Number(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}); }
 function badge(s){ return '<span class="badge '+s+'">'+s+'</span>'; }
-function render(){ state.token ? renderDashboard() : renderLogin(); }
+function render(){
+  if (!state.token) return renderLogin();
+  if (state.user.role === 'superadmin') return renderSuperadminPlatform();
+  return renderDashboard();
+}
 function renderLogin(){
   appEl.innerHTML =
     '<div class="auth-shell">' +
@@ -441,6 +461,75 @@ function buildSuppliersHtml(user){
   return html;
 }
 
+async function renderSuperadminPlatform(){
+  appEl.innerHTML =
+    '<div style="min-height:100vh;background:var(--bg);">' +
+      '<div class="topbar-app"><div style="display:flex;align-items:center;gap:10px;"><div class="brand-logo" style="box-shadow:none;width:36px;height:36px;">'+TRUCK_SVG+'</div><div><strong>Platform Admin</strong><div class="muted" style="font-size:11px;">'+state.user.full_name+'</div></div></div><button class="secondary" id="platformLogoutBtn">Log out</button></div>' +
+      '<div style="max-width:900px;margin:0 auto;padding:20px;">' +
+        '<div class="card"><h2>Add a construction company</h2><p class="muted">Onboard a new company with its logo and details. Optionally set up its first site and admin login at the same time.</p>' +
+          '<div class="row"><div><label>Company name</label><input id="org_name" placeholder="e.g. Acme Builders Ltd" /></div><div><label>Logo</label><input id="org_logo" type="file" accept="image/*" /></div></div>' +
+          '<div class="row"><div><label>Contact email</label><input id="org_email" type="email" /></div><div><label>Contact phone</label><input id="org_phone" /></div></div>' +
+          '<div class="row"><div><label>Address</label><input id="org_address" /></div><div><label>Registration number</label><input id="org_regnum" /></div></div>' +
+          '<h2 style="margin-top:16px;">Optional: first site + admin login</h2>' +
+          '<div class="row"><div><label>First site name</label><input id="org_site_name" placeholder="e.g. Main Site" /></div></div>' +
+          '<div class="row"><div><label>Admin full name</label><input id="org_admin_name" /></div><div><label>Admin email</label><input id="org_admin_email" type="email" /></div></div>' +
+          '<div style="margin-top:12px;"><button id="createOrgBtn">Create company</button></div><div class="error" id="createOrgErr"></div><div id="createOrgResult"></div>' +
+        '</div>' +
+        '<div class="card"><h2>Companies on this platform</h2><div id="orgList"><div class="skeleton" style="width:85%;"></div><div class="skeleton" style="width:60%;"></div></div></div>' +
+      '</div>' +
+    '</div>';
+
+  document.getElementById('platformLogoutBtn').onclick = logout;
+  document.getElementById('createOrgBtn').onclick = async () => {
+    const formData = new FormData();
+    formData.append('name', document.getElementById('org_name').value.trim());
+    if (document.getElementById('org_logo').files[0]) formData.append('logo', document.getElementById('org_logo').files[0]);
+    formData.append('contact_email', document.getElementById('org_email').value.trim());
+    formData.append('contact_phone', document.getElementById('org_phone').value.trim());
+    formData.append('address', document.getElementById('org_address').value.trim());
+    formData.append('registration_number', document.getElementById('org_regnum').value.trim());
+    formData.append('first_site_name', document.getElementById('org_site_name').value.trim());
+    formData.append('admin_full_name', document.getElementById('org_admin_name').value.trim());
+    formData.append('admin_email', document.getElementById('org_admin_email').value.trim());
+    if (!document.getElementById('org_name').value.trim()) { document.getElementById('createOrgErr').textContent = 'Company name is required.'; return; }
+    try {
+      const res = await fetch(API+'/superadmin/organizations', { method:'POST', headers:{Authorization:'Bearer '+state.token}, body: formData });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || 'Could not create company');
+      document.getElementById('createOrgErr').textContent = '';
+      let msg = '<div class="card" style="background:#e2f1e8;margin-top:10px;"><strong>Company created.</strong>';
+      if (result.admin) msg += '<br/>Admin login: '+result.admin.email+'<br/>Temporary password: <strong>'+result.admin.temporary_password+'</strong><br/><span class="muted">Share this with them directly — it will not be shown again.</span>';
+      msg += '</div>';
+      document.getElementById('createOrgResult').innerHTML = msg;
+      ['org_name','org_email','org_phone','org_address','org_regnum','org_site_name','org_admin_name','org_admin_email'].forEach(id => document.getElementById(id).value = '');
+      document.getElementById('org_logo').value = '';
+      loadOrganizations();
+    } catch(e) { document.getElementById('createOrgErr').textContent = e.message; }
+  };
+  loadOrganizations();
+}
+async function loadOrganizations(){
+  const el = document.getElementById('orgList');
+  try {
+    const orgs = await api('/superadmin/organizations');
+    if (!orgs.length) { el.textContent = 'No companies yet.'; return; }
+    el.innerHTML = orgs.map(o =>
+      '<div class="card" style="display:flex;align-items:center;gap:14px;margin-bottom:10px;padding:14px;">' +
+        (o.logo_url ? '<img src="'+o.logo_url+'" style="width:48px;height:48px;border-radius:8px;object-fit:cover;" />' : '<div style="width:48px;height:48px;border-radius:8px;background:#eee;display:flex;align-items:center;justify-content:center;color:#999;font-size:11px;">No logo</div>') +
+        '<div style="flex:1;"><strong>'+o.name+'</strong>'+(o.is_active===false?' <span class="badge rejected">inactive</span>':' <span class="badge paid">active</span>')+
+        '<div class="muted">'+(o.contact_email||'')+(o.contact_phone?' · '+o.contact_phone:'')+'</div>' +
+        '<div class="muted">'+o.site_count+' site(s) · '+o.user_count+' user(s)</div></div>' +
+        '<button class="'+(o.is_active===false?'success':'danger')+'" data-toggle-org="'+o.id+'" data-next="'+(o.is_active===false?'true':'false')+'">'+(o.is_active===false?'Activate':'Deactivate')+'</button>' +
+      '</div>'
+    ).join('');
+    el.querySelectorAll('[data-toggle-org]').forEach(btn => {
+      btn.onclick = async () => {
+        try { await api('/superadmin/organizations/'+btn.dataset.toggleOrg+'/status', {method:'PATCH', body: JSON.stringify({is_active: btn.dataset.next==='true'})}); loadOrganizations(); }
+        catch(e){ alert(e.message); }
+      };
+    });
+  } catch(e) { el.textContent = 'Could not load companies.'; }
+}
 async function renderDashboard(){
   const {user} = state;
   appEl.innerHTML =
@@ -1373,7 +1462,7 @@ app.post('/api/auth/login', async (req, res) => {
   }
 
   const token = signToken(user);
-  res.json({ token, user: { id: user.id, full_name: user.full_name, email: user.email, role: user.role, site_id: user.site_id } });
+  res.json({ token, user: { id: user.id, full_name: user.full_name, email: user.email, role: user.role, site_id: user.site_id, organization_id: user.organization_id } });
 });
 
 app.post('/api/auth/change-password', requireAuth, async (req, res) => {
@@ -1543,7 +1632,7 @@ app.get('/api/transactions', requireAuth, async (req, res) => {
 
 app.get('/api/summary', requireAuth, async (req, res) => {
   let query = supabase.from('cst_transactions').select('status, amount, category');
-  if (req.user.role !== 'admin' && req.user.site_id) query = query.eq('site_id', req.user.site_id);
+  query = await scopeToSites(query, req.user);
   const { data, error } = await query;
   if (error) return res.status(500).json({ error: error.message });
 
@@ -1555,7 +1644,7 @@ app.get('/api/summary', requireAuth, async (req, res) => {
   }
 
   let docQuery = supabase.from('cst_documents').select('extracted_amount, extracted_payment_status').eq('extraction_status', 'done').not('extracted_amount', 'is', null);
-  if (req.user.role !== 'admin' && req.user.site_id) docQuery = docQuery.eq('site_id', req.user.site_id);
+  docQuery = await scopeToSites(docQuery, req.user);
   const { data: docs } = await docQuery;
   summary.documents_paid = 0;
   summary.documents_pending = 0;
@@ -1682,13 +1771,23 @@ app.delete('/api/transactions/:id', requireAuth, requireRole('manager', 'admin')
 });
 
 // Bulk-clear all transaction data for a site — destructive, requires explicit confirm=yes
-app.delete('/api/transactions', requireAuth, requireRole('manager', 'admin'), async (req, res) => {
+app.delete('/api/transactions', requireAuth, requireRole('manager', 'admin', 'superadmin'), async (req, res) => {
   if (req.query.confirm !== 'yes') return res.status(400).json({ error: 'Add ?confirm=yes to confirm this destructive action' });
 
   let query = supabase.from('cst_transactions').delete();
-  const site_id = req.user.role === 'admin' ? req.query.site_id : req.user.site_id;
-  if (site_id) query = query.eq('site_id', site_id);
-  else if (req.user.role !== 'admin') return res.status(400).json({ error: 'No site associated with your account' });
+  if (req.query.site_id) {
+    // Explicit site requested — only allow it if it's actually within the requester's reach.
+    if (req.user.role !== 'superadmin') {
+      const allowedSites = req.user.role === 'admin' ? await getOrgSiteIds(req.user.organization_id) : [req.user.site_id];
+      if (!allowedSites.includes(req.query.site_id)) return res.status(403).json({ error: 'That site is not in your organization' });
+    }
+    query = query.eq('site_id', req.query.site_id);
+  } else if (req.user.role === 'superadmin') {
+    return res.status(400).json({ error: 'Superadmin must specify ?site_id= explicitly — refusing to wipe every organization at once' });
+  } else {
+    query = await scopeToSites(query, req.user);
+    if (req.user.role !== 'admin' && !req.user.site_id) return res.status(400).json({ error: 'No site associated with your account' });
+  }
 
   const { error } = await query;
   if (error) return res.status(500).json({ error: error.message });
@@ -1782,7 +1881,7 @@ app.post('/api/users', requireAuth, requireRole('manager', 'admin'), async (req,
   const password_hash = bcrypt.hashSync(plainPassword, 10);
 
   const { data, error } = await supabase.from('cst_users').insert({
-    full_name, email: email.toLowerCase().trim(), password_hash, role, site_id
+    full_name, email: email.toLowerCase().trim(), password_hash, role, site_id, organization_id: req.user.organization_id
   }).select('id, full_name, email, role, site_id').single();
 
   if (error) {
@@ -1795,7 +1894,7 @@ app.post('/api/users', requireAuth, requireRole('manager', 'admin'), async (req,
 
 app.get('/api/users', requireAuth, requireRole('manager', 'finance', 'admin'), async (req, res) => {
   let query = supabase.from('cst_users').select('id, full_name, email, role, site_id, is_active, created_at').order('created_at', { ascending: false });
-  if (req.user.role !== 'admin') query = query.eq('site_id', req.user.site_id);
+  query = await scopeToSites(query, req.user);
   const { data, error } = await query;
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
@@ -1897,7 +1996,7 @@ app.get('/api/transactions/:id/receipt', requireAuth, async (req, res) => {
 // ---------- Vendors / partners ----------
 app.get('/api/vendors', requireAuth, async (req, res) => {
   let query = supabase.from('cst_vendors').select('*').order('name');
-  if (req.user.role !== 'admin' && req.user.site_id) query = query.eq('site_id', req.user.site_id);
+  query = await scopeToSites(query, req.user);
   const { data, error } = await query;
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
@@ -1955,7 +2054,7 @@ app.post('/api/workers', requireAuth, requireRole('clerk', 'manager', 'admin'), 
 
 app.get('/api/workers', requireAuth, async (req, res) => {
   let query = supabase.from('cst_workers').select('*').order('name');
-  if (req.user.role !== 'admin') query = query.eq('site_id', req.user.site_id);
+  query = await scopeToSites(query, req.user);
   const { data, error } = await query;
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
@@ -1983,7 +2082,7 @@ app.post('/api/attendance', requireAuth, requireRole('clerk', 'admin'), async (r
 app.get('/api/attendance', requireAuth, async (req, res) => {
   const date = req.query.date || new Date().toISOString().slice(0, 10);
   let query = supabase.from('cst_attendance').select('worker_id, attendance_date').eq('attendance_date', date);
-  if (req.user.role !== 'admin') query = query.eq('site_id', req.user.site_id);
+  query = await scopeToSites(query, req.user);
   const { data, error } = await query;
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
@@ -2003,12 +2102,12 @@ async function computeWeeklyWages(req) {
   const endStr = end.toISOString().slice(0, 10);
 
   let workerQuery = supabase.from('cst_workers').select('*').order('name');
-  if (req.user.role !== 'admin') workerQuery = workerQuery.eq('site_id', req.user.site_id);
+  workerQuery = await scopeToSites(workerQuery, req.user);
   const { data: workers, error: wErr } = await workerQuery;
   if (wErr) throw wErr;
 
   let attQuery = supabase.from('cst_attendance').select('worker_id, attendance_date').gte('attendance_date', start).lte('attendance_date', endStr);
-  if (req.user.role !== 'admin') attQuery = attQuery.eq('site_id', req.user.site_id);
+  attQuery = await scopeToSites(attQuery, req.user);
   const { data: attendance, error: aErr } = await attQuery;
   if (aErr) throw aErr;
 
@@ -2316,7 +2415,7 @@ app.post('/api/documents', requireAuth, upload.single('file'), async (req, res) 
 
 app.get('/api/documents', requireAuth, async (req, res) => {
   let query = supabase.from('cst_documents').select('*, uploader:uploaded_by(full_name, role)').order('created_at', { ascending: false });
-  if (req.user.role !== 'admin') query = query.eq('site_id', req.user.site_id);
+  query = await scopeToSites(query, req.user);
   const { data, error } = await query;
   if (error) return res.status(500).json({ error: error.message });
 
@@ -2339,12 +2438,12 @@ app.delete('/api/documents/:id', requireAuth, requireRole('manager', 'admin'), a
 // ---------- Store / material inventory ----------
 async function getStoreItemsWithTotals(req) {
   let query = supabase.from('cst_store_items').select('*').order('name');
-  if (req.user.role !== 'admin') query = query.eq('site_id', req.user.site_id);
+  query = await scopeToSites(query, req.user);
   const { data, error } = await query;
   if (error) throw new Error(error.message);
 
   let movQuery = supabase.from('cst_store_movements').select('item_id, movement_type, quantity');
-  if (req.user.role !== 'admin') movQuery = movQuery.eq('site_id', req.user.site_id);
+  movQuery = await scopeToSites(movQuery, req.user);
   const { data: movements } = await movQuery;
 
   const totals = {};
@@ -2386,11 +2485,11 @@ app.get('/api/registry/attendance-report.pdf', requireAuth, async (req, res) => 
     const endStr = days[6].date;
 
     let workerQuery = supabase.from('cst_workers').select('*').order('name');
-    if (req.user.role !== 'admin') workerQuery = workerQuery.eq('site_id', req.user.site_id);
+    workerQuery = await scopeToSites(workerQuery, req.user);
     const { data: workers } = await workerQuery;
 
     let attQuery = supabase.from('cst_attendance').select('worker_id, attendance_date').gte('attendance_date', start).lte('attendance_date', endStr);
-    if (req.user.role !== 'admin') attQuery = attQuery.eq('site_id', req.user.site_id);
+    attQuery = await scopeToSites(attQuery, req.user);
     const { data: attendance } = await attQuery;
 
     const presentSet = new Set((attendance || []).map(a => a.worker_id + '_' + a.attendance_date));
@@ -2582,9 +2681,9 @@ app.get('/api/store/items/:id/movements', requireAuth, async (req, res) => {
 });
 
 // ---------- Analytics ----------
-app.get('/api/analytics', requireAuth, requireRole('manager', 'finance', 'admin'), async (req, res) => {
+app.get('/api/analytics', requireAuth, requireRole('manager', 'finance', 'admin', 'superadmin'), async (req, res) => {
   try {
-    const siteFilter = (q) => req.user.role !== 'admin' ? q.eq('site_id', req.user.site_id) : q;
+    const siteFilter = async (q) => await scopeToSites(q, req.user);
 
     const { data: txns } = await siteFilter(supabase.from('cst_transactions').select('status, category, amount, transaction_date'));
     const byCategory = {};
@@ -2620,7 +2719,7 @@ app.get('/api/analytics', requireAuth, requireRole('manager', 'finance', 'admin'
     const financial = { by_category: byCategory, by_status: byStatus, weekly_trend: weeks, wages_paid_total: wagesPaidTotal };
 
     let operational = null;
-    if (['manager', 'admin'].includes(req.user.role)) {
+    if (['manager', 'admin', 'superadmin'].includes(req.user.role)) {
       const { data: workers } = await siteFilter(supabase.from('cst_workers').select('id'));
       const todayStr = new Date().toISOString().slice(0, 10);
       const { data: todayAtt } = await siteFilter(supabase.from('cst_attendance').select('worker_id').eq('attendance_date', todayStr));
@@ -2646,7 +2745,7 @@ app.get('/api/analytics', requireAuth, requireRole('manager', 'finance', 'admin'
 // ---------- Suppliers (vendors with payment tracking) ----------
 app.get('/api/suppliers', requireAuth, requireRole('manager', 'finance', 'admin'), async (req, res) => {
   let query = supabase.from('cst_vendors').select('*').eq('role_type', 'vendor').order('name');
-  if (req.user.role !== 'admin' && req.user.site_id) query = query.eq('site_id', req.user.site_id);
+  query = await scopeToSites(query, req.user);
   const { data: suppliers, error } = await query;
   if (error) return res.status(500).json({ error: error.message });
   if (!suppliers.length) return res.json([]);
@@ -2794,6 +2893,69 @@ app.post('/api/store/items/:id/reorder-request', requireAuth, requireRole('store
   for (const r of (recipients || [])) await notify(r.id, txn.id, 'batch_submitted', `Reorder request: ${quantity} ${item.unit} of ${item.name} (est. KES ${Number(estimated_amount).toLocaleString()}) — awaiting approval.`);
 
   res.status(201).json(txn);
+});
+
+// ---------- Superadmin: platform-level company (organization) management ----------
+app.get('/api/superadmin/organizations', requireAuth, requireRole('superadmin'), async (req, res) => {
+  const { data: orgs, error } = await supabase.from('cst_organizations').select('*').order('created_at', { ascending: false });
+  if (error) return res.status(500).json({ error: error.message });
+
+  const withCounts = await Promise.all(orgs.map(async o => {
+    const { count: siteCount } = await supabase.from('cst_sites').select('id', { count: 'exact', head: true }).eq('organization_id', o.id);
+    const { count: userCount } = await supabase.from('cst_users').select('id', { count: 'exact', head: true }).eq('organization_id', o.id);
+    return { ...o, site_count: siteCount || 0, user_count: userCount || 0 };
+  }));
+  res.json(withCounts);
+});
+
+app.post('/api/superadmin/organizations', requireAuth, requireRole('superadmin'), upload.single('logo'), async (req, res) => {
+  const { name, contact_email, contact_phone, address, registration_number, first_site_name, admin_full_name, admin_email } = req.body;
+  if (!name) return res.status(400).json({ error: 'Company name is required' });
+
+  let logo_url = null;
+  if (req.file) {
+    const safeName = req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const path = `${Date.now()}-${safeName}`;
+    const { error: upErr } = await supabase.storage.from('org-logos').upload(path, req.file.buffer, { contentType: req.file.mimetype });
+    if (upErr) return res.status(500).json({ error: 'Logo upload failed: ' + upErr.message });
+    const { data: pub } = supabase.storage.from('org-logos').getPublicUrl(path);
+    logo_url = pub.publicUrl;
+  }
+
+  const { data: org, error: orgErr } = await supabase.from('cst_organizations').insert({
+    name, logo_url, contact_email: contact_email || null, contact_phone: contact_phone || null,
+    address: address || null, registration_number: registration_number || null, created_by: req.user.id
+  }).select().single();
+  if (orgErr) return res.status(500).json({ error: orgErr.message });
+
+  let site = null, adminAccount = null;
+  if (first_site_name) {
+    const { data: siteData, error: siteErr } = await supabase.from('cst_sites').insert({
+      name: first_site_name, organization_id: org.id
+    }).select().single();
+    if (siteErr) return res.status(500).json({ error: 'Organization created, but site setup failed: ' + siteErr.message });
+    site = siteData;
+
+    if (admin_full_name && admin_email) {
+      const plainPassword = randomPassword();
+      const { data: adminData, error: adminErr } = await supabase.from('cst_users').insert({
+        full_name: admin_full_name, email: admin_email.toLowerCase().trim(), password_hash: bcrypt.hashSync(plainPassword, 10),
+        role: 'admin', site_id: site.id, organization_id: org.id
+      }).select('id, full_name, email, role').single();
+      if (adminErr) return res.status(500).json({ error: 'Organization and site created, but admin account failed: ' + adminErr.message });
+      adminAccount = { ...adminData, temporary_password: plainPassword };
+    }
+  }
+
+  res.status(201).json({ organization: org, site, admin: adminAccount });
+});
+
+app.patch('/api/superadmin/organizations/:id/status', requireAuth, requireRole('superadmin'), async (req, res) => {
+  const { is_active } = req.body;
+  if (typeof is_active !== 'boolean') return res.status(400).json({ error: 'is_active (boolean) is required' });
+  const { data, error } = await supabase.from('cst_organizations').update({ is_active }).eq('id', req.params.id).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
 });
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
