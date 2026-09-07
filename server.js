@@ -13,20 +13,50 @@ const PDF_FOREST = '#0f2818';
 const PDF_MOSS = '#7ab98a';
 const PDF_LEFT = 40, PDF_RIGHT = 555;
 
-function drawFormHeader(doc, title, subtitle) {
-  // Logo badge (truck mark drawn with vectors, matching the app's brand)
+function drawDefaultLogo(doc) {
   doc.roundedRect(PDF_LEFT, 40, 44, 44, 8).fillAndStroke('#eaf7ee', PDF_FOREST);
   doc.rect(PDF_LEFT + 9, 57, 20, 13).fill(PDF_FOREST);
   doc.circle(PDF_LEFT + 16, 74, 3.5).fill(PDF_FOREST);
   doc.circle(PDF_LEFT + 29, 74, 3.5).fill(PDF_FOREST);
+}
 
-  doc.fillColor(PDF_FOREST).fontSize(20).font('Helvetica-Bold').text('Site Transactions', PDF_LEFT + 56, 44);
+function drawFormHeader(doc, title, subtitle, branding) {
+  let logoDrawn = false;
+  if (branding && branding.logoBuffer) {
+    try {
+      doc.save();
+      doc.roundedRect(PDF_LEFT, 40, 44, 44, 8).clip();
+      doc.image(branding.logoBuffer, PDF_LEFT, 40, { width: 44, height: 44 });
+      doc.restore();
+      logoDrawn = true;
+    } catch { logoDrawn = false; }
+  }
+  if (!logoDrawn) drawDefaultLogo(doc);
+
+  const brandName = (branding && branding.name) || 'Site Transactions';
+  doc.fillColor(PDF_FOREST).fontSize(20).font('Helvetica-Bold').text(brandName, PDF_LEFT + 56, 44, { width: PDF_RIGHT - PDF_LEFT - 56 });
   doc.fontSize(10).font('Helvetica').fillColor('#555').text(subtitle, PDF_LEFT + 56, 68);
 
   doc.moveTo(PDF_LEFT, 96).lineTo(PDF_RIGHT, 96).lineWidth(1.5).strokeColor(PDF_FOREST).stroke();
   doc.lineWidth(1);
 
   doc.fontSize(14).font('Helvetica-Bold').fillColor(PDF_FOREST).text(title, PDF_LEFT, 106);
+}
+
+async function fetchOrgBranding(req) {
+  if (!req.user.organization_id) return null;
+  try {
+    const { data: org } = await supabase.from('cst_organizations').select('name, logo_url').eq('id', req.user.organization_id).single();
+    if (!org) return null;
+    let logoBuffer = null;
+    if (org.logo_url) {
+      try {
+        const r = await fetch(org.logo_url);
+        if (r.ok) logoBuffer = Buffer.from(await r.arrayBuffer());
+      } catch {}
+    }
+    return { name: org.name, logoBuffer };
+  } catch { return null; }
 }
 
 function drawInfoBox(doc, y, fields) {
@@ -1965,13 +1995,27 @@ app.get('/api/transactions/:id/receipt', requireAuth, async (req, res) => {
   const { data: txn, error } = await supabase.from('cst_transactions').select('*').eq('id', id).single();
   if (error || !txn) return res.status(404).send('Transaction not found');
 
-  const allowed = req.user.role === 'admin' || req.user.id === txn.created_by || req.user.id === txn.manager_approved_by || req.user.id === txn.finance_approved_by || ['manager', 'finance'].includes(req.user.role);
+  let allowed = req.user.id === txn.created_by || req.user.id === txn.manager_approved_by || req.user.id === txn.finance_approved_by || ['manager', 'finance'].includes(req.user.role);
+  if (!allowed && req.user.role === 'admin') {
+    const orgSites = await getOrgSiteIds(req.user.organization_id);
+    allowed = orgSites.includes(txn.site_id);
+  }
+  if (!allowed && req.user.role === 'superadmin') allowed = true;
   if (!allowed) return res.status(403).send('Not permitted to view this receipt');
   if (txn.status !== 'paid') return res.status(400).send('Receipt is only available once a transaction is paid');
+
+  let orgName = 'Site Transactions', orgLogoUrl = null;
+  if (req.user.organization_id) {
+    const { data: org } = await supabase.from('cst_organizations').select('name, logo_url').eq('id', req.user.organization_id).single();
+    if (org) { orgName = org.name; orgLogoUrl = org.logo_url; }
+  }
 
   res.type('html').send(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Receipt ${id}</title>
   <style>body{font-family:Arial,sans-serif;max-width:480px;margin:40px auto;color:#1f2d3d;}
   .box{border:1px solid #dde1e6;border-radius:10px;padding:24px;}
+  .brand{display:flex;align-items:center;gap:10px;margin-bottom:14px;}
+  .brand img{width:40px;height:40px;border-radius:8px;object-fit:cover;}
+  .brand-name{font-weight:700;font-size:15px;}
   h1{font-size:18px;margin:0 0 4px;} .muted{color:#6b7684;font-size:12px;}
   table{width:100%;border-collapse:collapse;margin-top:16px;}
   td{padding:8px 0;border-bottom:1px solid #eee;font-size:14px;}
@@ -1979,6 +2023,7 @@ app.get('/api/transactions/:id/receipt', requireAuth, async (req, res) => {
   .stamp{margin-top:20px;padding:8px 12px;background:#dfeee5;color:#2f7d4f;display:inline-block;border-radius:6px;font-weight:700;font-size:13px;}
   @media print{button{display:none;}}</style></head>
   <body><div class="box">
+  <div class="brand">${orgLogoUrl ? `<img src="${orgLogoUrl}" alt="logo" />` : ''}<span class="brand-name">${orgName}</span></div>
   <h1>Payment Receipt</h1>
   <p class="muted">Transaction ID: ${txn.id}</p>
   <table>
@@ -2250,12 +2295,13 @@ app.post('/api/mpesa/b2c/timeout', express.json(), (req, res) => {
 
 // ---------- Printable blank transaction form (for offline/no-network use) ----------
 app.get('/api/forms/transaction-log.pdf', requireAuth, async (req, res) => {
+  const branding = await fetchOrgBranding(req);
   const doc = new PDFDocument({ margin: 40, size: 'A4' });
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', 'attachment; filename="site-transaction-log-form.pdf"');
   doc.pipe(res);
 
-  drawFormHeader(doc, 'Manual Transaction Log', 'Construction Portal');
+  drawFormHeader(doc, 'Manual Transaction Log', 'Construction Portal', branding);
 
   const infoBottom = drawInfoBox(doc, 130, [
     'Site name / ID:  ____________________________________________          Date:  ______________________',
@@ -2287,12 +2333,13 @@ app.get('/api/forms/transaction-log.pdf', requireAuth, async (req, res) => {
 });
 
 app.get('/api/forms/worker-registration.pdf', requireAuth, async (req, res) => {
+  const branding = await fetchOrgBranding(req);
   const doc = new PDFDocument({ margin: 40, size: 'A4' });
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', 'attachment; filename="worker-registration-form.pdf"');
   doc.pipe(res);
 
-  drawFormHeader(doc, 'Worker Registration Form', 'Construction Portal');
+  drawFormHeader(doc, 'Worker Registration Form', 'Construction Portal', branding);
 
   const infoBottom = drawInfoBox(doc, 130, [
     'Site name / ID:  ____________________________________________          Date:  ______________________',
@@ -2493,13 +2540,14 @@ app.get('/api/registry/attendance-report.pdf', requireAuth, async (req, res) => 
     const { data: attendance } = await attQuery;
 
     const presentSet = new Set((attendance || []).map(a => a.worker_id + '_' + a.attendance_date));
+    const branding = await fetchOrgBranding(req);
 
     const doc = new PDFDocument({ margin: 40, size: 'A4' });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="attendance-report-${start}-to-${endStr}.pdf"`);
     doc.pipe(res);
 
-    drawFormHeader(doc, 'Weekly Attendance Report', 'Construction Portal');
+    drawFormHeader(doc, 'Weekly Attendance Report', 'Construction Portal', branding);
     const infoBottom = drawInfoBox(doc, 130, [
       `Week: ${start} to ${endStr}`,
       `Total workers: ${(workers || []).length}`
@@ -2565,12 +2613,13 @@ app.get('/api/registry/attendance-report.pdf', requireAuth, async (req, res) => 
 app.get('/api/store/report.pdf', requireAuth, async (req, res) => {
   try {
     const items = await getStoreItemsWithTotals(req);
+    const branding = await fetchOrgBranding(req);
     const doc = new PDFDocument({ margin: 40, size: 'A4' });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', 'attachment; filename="stock-report.pdf"');
     doc.pipe(res);
 
-    drawFormHeader(doc, 'Material Stock Report', 'Construction Portal');
+    drawFormHeader(doc, 'Material Stock Report', 'Construction Portal', branding);
     const infoBottom = drawInfoBox(doc, 130, [
       'Generated: ' + new Date().toLocaleString(),
       'Total materials tracked: ' + items.length
