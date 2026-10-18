@@ -619,6 +619,7 @@ async function renderDashboard(){
         (['manager','finance','admin'].includes(user.role) ? '<a class="nav-item" id="navDashboard" data-view="dashboard"><span class="nav-icon">&#8962;</span> Dashboard</a>' : '') +
         (['manager','finance','admin'].includes(user.role) ? '<a class="nav-item" id="navAnalytics" data-view="analytics"><span class="nav-icon">&#128202;</span> Analytics</a>' : '') +
         (['manager','finance','admin'].includes(user.role) ? '<a class="nav-item" id="navSuppliers" data-view="suppliers"><span class="nav-icon">&#127981;</span> Suppliers</a>' : '') +
+        (['manager','finance','admin'].includes(user.role) ? '<a class="nav-item" id="navPayments" data-view="payments"><span class="nav-icon">&#128179;</span> Payments</a>' : '') +
         (['clerk','finance','manager','admin'].includes(user.role) ? '<a class="nav-item" id="navTransactions" data-view="transactions"><span class="nav-icon">&#128203;</span> Transactions</a>' : '') +
         (['clerk','finance','manager','admin'].includes(user.role) ? '<a class="nav-item" id="navRegistry" data-view="registry"><span class="nav-icon">&#128101;</span> Registry</a>' : '') +
         (['storekeeper','finance','manager','admin'].includes(user.role) ? '<a class="nav-item" id="navStore" data-view="store"><span class="nav-icon">&#128230;</span> Store</a>' : '') +
@@ -656,6 +657,7 @@ async function renderDashboard(){
     else if (view === 'store') html = buildStoreHtml(user);
     else if (view === 'analytics') html = buildAnalyticsHtml(user);
     else if (view === 'suppliers') html = buildSuppliersHtml(user);
+    else if (view === 'payments') html = buildPaymentsHtml(user);
     content.innerHTML = html;
     wireContent();
     closeSidebar();
@@ -668,6 +670,7 @@ async function renderDashboard(){
 
   function wireContent(){
     if (document.getElementById('summaryBox')) loadSummary();
+    if (document.getElementById('ledgerBox')) wirePayments();
     if (document.getElementById('queuePending')) loadApprovalQueues();
     if (document.getElementById('notifList')) loadNotifications();
     if (document.getElementById('userList')) loadUsers();
@@ -1196,6 +1199,112 @@ function simpleBarChart(rows, maxWidth){
   ).join('');
 }
 let openSupplierDetails = {};
+function downloadAuth(path, filename){
+  fetch(API+path, {headers:{Authorization:'Bearer '+state.token}}).then(function(r){ if(!r.ok) throw new Error('Download failed'); return r.blob(); }).then(function(blob){
+    var url = URL.createObjectURL(blob); var a = document.createElement('a'); a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove(); setTimeout(function(){ URL.revokeObjectURL(url); }, 2000);
+  }).catch(function(e){ alert(e.message); });
+}
+function escHtml(s){ return String(s==null?'':s).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+function buildPaymentsHtml(user){
+  var canBudget = ['manager','admin'].indexOf(user.role) >= 0;
+  var h = '';
+  h += '<div class="card"><h2>Site budget</h2><div id="budgetBox"><div class="skeleton" style="width:70%;"></div></div>';
+  if (canBudget) h += '<div class="row" style="margin-top:12px;"><div><label>Total budget (KES)</label><input id="budgetAmt" type="number" step="0.01" placeholder="e.g. 5000000" /></div><div><label>Warn me at (% used)</label><input id="budgetWarn" type="number" min="1" max="100" value="80" /></div></div><div style="margin-top:10px;"><button id="saveBudgetBtn">Save budget</button></div><div class="error" id="budgetErr"></div>';
+  h += '</div>';
+  h += '<div class="card" id="ledgerBox"><h2>Payments ledger</h2><p class="muted">Every payment made: expenses and worker wages. Search by supplier, worker or description, and filter by date.</p>' +
+    '<div class="row"><div><label>From</label><input id="ledgerFrom" type="date" /></div><div><label>To</label><input id="ledgerTo" type="date" /></div><div><label>Search</label><input id="ledgerQ" placeholder="supplier, worker, cement..." /></div></div>' +
+    '<div style="margin:10px 0;display:flex;gap:8px;flex-wrap:wrap;"><button id="ledgerSearchBtn">Search</button><button class="secondary" id="ledgerXlsBtn">Download Excel</button><button class="secondary" id="ledgerPdfBtn">Download PDF</button></div>' +
+    '<div id="ledgerTable"><div class="skeleton" style="width:85%;"></div></div></div>';
+  h += '<div class="card"><h2>Wage payment results</h2><p class="muted">See who was paid by M-Pesa and who failed.</p>' +
+    '<div class="row"><div><label>Week starting (Monday) - leave empty for this week</label><input id="wrStart" type="date" /></div></div>' +
+    '<div style="margin:10px 0;display:flex;gap:8px;flex-wrap:wrap;"><button class="secondary" id="wrRefreshBtn">Show results</button><button id="wrRetryBtn" style="display:none;">Retry failed payments</button></div>' +
+    '<div id="wrBox"><div class="skeleton" style="width:80%;"></div></div></div>';
+  h += '<div class="card"><h2>Finance summary report (PDF)</h2><p class="muted">Pending, approved, paid and rejected totals for a day, week or month.</p>' +
+    '<div class="row"><div><label>Report type</label><select id="sumPeriod"><option value="daily">Daily</option><option value="weekly" selected>Weekly (last 7 days)</option><option value="monthly">Monthly</option></select></div><div><label>Up to date</label><input id="sumDate" type="date" /></div></div>' +
+    '<div style="margin-top:10px;"><button id="sumPdfBtn">Download summary PDF</button></div></div>';
+  return h;
+}
+async function loadBudget(){
+  var el = document.getElementById('budgetBox'); if (!el) return;
+  try {
+    var b = await api('/budget');
+    var amtEl = document.getElementById('budgetAmt'), warnEl = document.getElementById('budgetWarn');
+    if (amtEl && b.budget_amount != null) { amtEl.value = b.budget_amount; warnEl.value = b.warn_percent; }
+    if (b.budget_amount == null) { el.innerHTML = '<p class="muted">No budget set for ' + escHtml(b.site_name) + ' yet.' + (amtEl ? ' Enter one below.' : ' Ask your manager to set it.') + '</p>'; return; }
+    var pct = Math.min(100, b.percent_used || 0);
+    var color = b.level === 'over' ? '#b03a3a' : b.level === 'warning' ? '#d98c2b' : '#2f7d4f';
+    var html = '';
+    if (b.level === 'over') html += '<div style="background:#fbeaea;color:#b03a3a;padding:10px 12px;border-radius:8px;margin-bottom:10px;font-weight:600;">Over budget: spending has passed the budget for ' + escHtml(b.site_name) + '.</div>';
+    else if (b.level === 'warning') html += '<div style="background:#fdf3e3;color:#a36413;padding:10px 12px;border-radius:8px;margin-bottom:10px;font-weight:600;">Warning: ' + b.percent_used.toFixed(0) + '% of the budget is used up.</div>';
+    html += '<div style="background:#e8ece9;border-radius:8px;height:18px;overflow:hidden;"><div style="width:' + pct + '%;height:100%;background:' + color + ';"></div></div>';
+    html += '<div class="row" style="margin-top:12px;">' +
+      '<div><div class="muted">Budget</div><strong>' + money(b.budget_amount) + '</strong></div>' +
+      '<div><div class="muted">Paid</div><strong>' + money(b.paid) + '</strong></div>' +
+      '<div><div class="muted">Approved, awaiting payment</div><strong>' + money(b.approved_unpaid) + '</strong></div>' +
+      '<div><div class="muted">Pending approval</div><strong>' + money(b.pending) + '</strong></div>' +
+      '<div><div class="muted">Remaining</div><strong style="color:' + color + ';">' + money(b.remaining) + '</strong></div></div>';
+    el.innerHTML = html;
+  } catch(e) { el.textContent = 'Could not load budget.'; }
+}
+async function loadLedger(){
+  var el = document.getElementById('ledgerTable'); if (!el) return;
+  var qs = ledgerQuery();
+  try {
+    var d = await api('/ledger' + qs);
+    if (!d.rows.length) { el.innerHTML = '<p class="muted">No payments found.</p>'; return; }
+    el.innerHTML = '<div class="muted" style="margin-bottom:6px;">' + d.rows.length + ' payments, total <strong>' + money(d.total) + '</strong></div><div style="overflow-x:auto;"><table><thead><tr><th>Date</th><th>Type</th><th>Paid to</th><th>Description</th><th>Method</th><th style="text-align:right;">Amount</th></tr></thead><tbody>' +
+      d.rows.map(function(r){ return '<tr><td>' + escHtml(r.date ? String(r.date).slice(0,10) : '') + '</td><td>' + escHtml(r.type) + '</td><td>' + escHtml(r.payee) + '</td><td>' + escHtml(r.description) + '</td><td>' + escHtml(r.method) + (r.reference ? '<br/><span class="muted">' + escHtml(r.reference) + '</span>' : '') + '</td><td style="text-align:right;font-weight:600;">' + money(r.amount) + '</td></tr>'; }).join('') +
+      '</tbody></table></div>';
+  } catch(e) { el.textContent = 'Could not load the ledger.'; }
+}
+function ledgerQuery(){
+  var p = [];
+  var f = document.getElementById('ledgerFrom').value, t = document.getElementById('ledgerTo').value, q = document.getElementById('ledgerQ').value.trim();
+  if (f) p.push('from=' + encodeURIComponent(f)); if (t) p.push('to=' + encodeURIComponent(t)); if (q) p.push('q=' + encodeURIComponent(q));
+  return p.length ? '?' + p.join('&') : '';
+}
+async function loadWageResults(){
+  var el = document.getElementById('wrBox'); if (!el) return;
+  var s = document.getElementById('wrStart').value;
+  try {
+    var d = await api('/wages/results' + (s ? '?start=' + encodeURIComponent(s) : ''));
+    var retryBtn = document.getElementById('wrRetryBtn');
+    var canRetry = ['finance','admin'].indexOf(state.user.role) >= 0;
+    if (retryBtn) { retryBtn.style.display = (canRetry && d.counts.failed > 0) ? 'inline-block' : 'none'; retryBtn.dataset.start = d.start; }
+    if (!d.rows.length) { el.innerHTML = '<p class="muted">No wage payments recorded for the week of ' + d.start + '.</p>'; return; }
+    var label = { confirmed:['paid','Paid - M-Pesa confirmed'], sent:['pending','Sent - awaiting confirmation'], failed:['rejected','FAILED'], not_attempted:['approved','Recorded - no M-Pesa sent'] };
+    el.innerHTML = '<div class="muted" style="margin-bottom:6px;">Week ' + d.start + ' to ' + d.end + ' - Confirmed: ' + (d.counts.confirmed||0) + ', awaiting: ' + (d.counts.sent||0) + ', failed: ' + (d.counts.failed||0) + ', recorded only: ' + (d.counts.not_attempted||0) + (d.counts.failed ? ' (' + money(d.failed_total) + ' not delivered)' : '') + '</div>' +
+      '<div style="overflow-x:auto;"><table><thead><tr><th>Worker</th><th>Phone</th><th>Days</th><th>Amount</th><th>Status</th><th>Receipt / note</th></tr></thead><tbody>' +
+      d.rows.map(function(r){ var l = label[r.disbursement_status] || ['pending', r.disbursement_status]; return '<tr><td>' + escHtml(r.worker ? r.worker.name : '') + '</td><td>' + escHtml(r.worker ? r.worker.phone_number : '') + '</td><td>' + r.days_present + '</td><td>' + money(r.total_amount) + '</td><td><span class="badge ' + l[0] + '">' + l[1] + '</span></td><td class="muted">' + escHtml(r.mpesa_receipt || r.mpesa_result_desc || '') + '</td></tr>'; }).join('') + '</tbody></table></div>';
+  } catch(e) { el.textContent = 'Could not load wage results.'; }
+}
+function wirePayments(){
+  var today = new Date().toISOString().slice(0,10);
+  var sd = document.getElementById('sumDate'); if (sd) sd.value = today;
+  loadBudget(); loadLedger(); loadWageResults();
+  var sb = document.getElementById('saveBudgetBtn');
+  if (sb) sb.onclick = async function(){
+    var err = document.getElementById('budgetErr'); err.textContent = '';
+    try { await api('/budget', {method:'PUT', body: JSON.stringify({budget_amount: document.getElementById('budgetAmt').value, warn_percent: document.getElementById('budgetWarn').value})}); loadBudget(); }
+    catch(e){ err.textContent = e.message; }
+  };
+  document.getElementById('ledgerSearchBtn').onclick = loadLedger;
+  document.getElementById('ledgerXlsBtn').onclick = function(){ downloadAuth('/ledger/export' + ledgerQuery(), 'payments-ledger.xlsx'); };
+  document.getElementById('ledgerPdfBtn').onclick = function(){ downloadAuth('/ledger.pdf' + ledgerQuery(), 'payments-ledger.pdf'); };
+  document.getElementById('wrRefreshBtn').onclick = loadWageResults;
+  document.getElementById('wrRetryBtn').onclick = async function(){
+    if (!confirm('Retry the failed M-Pesa payments for this week? Workers who were already paid will not be paid again.')) return;
+    try {
+      var r = await api('/wages/weekly/retry-failed', {method:'POST', body: JSON.stringify({start: this.dataset.start})});
+      alert(r.message || ('Retried ' + r.retried + ' payment(s); ' + r.sent + ' sent. Check the status column.'));
+      loadWageResults();
+    } catch(e){ alert(e.message); }
+  };
+  document.getElementById('sumPdfBtn').onclick = function(){
+    var p = document.getElementById('sumPeriod').value, d = document.getElementById('sumDate').value || today;
+    downloadAuth('/reports/finance-summary.pdf?period=' + p + '&date=' + d, 'finance-summary-' + p + '-' + d + '.pdf');
+  };
+}
 async function loadSuppliers(){
   const el = document.getElementById('supplierList');
   const canDelete = ['manager','admin'].includes(state.user.role);
@@ -1204,7 +1313,7 @@ async function loadSuppliers(){
     if (!suppliers.length) { el.textContent = 'No suppliers added yet.'; return; }
     let html = '<table><thead><tr><th>Supplier</th><th>Contact</th><th>Total Paid</th><th>Total Pending</th><th>Transactions</th><th>Actions</th></tr></thead><tbody>';
     suppliers.forEach(s => {
-      html += '<tr><td>'+s.name+'</td><td class="muted">'+(s.contact_phone||'')+(s.contact_email?' / '+s.contact_email:'')+'</td><td style="color:#2f7d4f;font-weight:600;">'+money(s.total_paid)+'</td><td style="color:#d98c2b;font-weight:600;">'+money(s.total_pending)+'</td><td>'+s.transaction_count+'</td><td class="actions"><button class="secondary" data-supplier-details="'+s.id+'">Details</button> '+(canDelete?'<button class="danger" data-del-supplier="'+s.id+'">Remove</button>':'')+'</td></tr>';
+      html += '<tr><td>'+s.name+'</td><td class="muted">'+(s.contact_phone||'')+(s.contact_email?' / '+s.contact_email:'')+'</td><td style="color:#2f7d4f;font-weight:600;">'+money(s.total_paid)+'</td><td style="color:#d98c2b;font-weight:600;">'+money(s.total_pending)+'</td><td>'+s.transaction_count+'</td><td class="actions"><button class="secondary" data-supplier-details="'+s.id+'">Details</button> '+'<button class="secondary" data-supplier-statement="'+s.id+'" data-supplier-name="'+String(s.name).replace(/"/g,'')+'">Statement PDF</button> '+(canDelete?'<button class="danger" data-del-supplier="'+s.id+'">Remove</button>':'')+'</td></tr>';
       html += '<tr id="supplier-details-'+s.id+'" style="display:none;"><td colspan="6"><div id="supplier-details-body-'+s.id+'" class="muted">Loading...</div></td></tr>';
     });
     html += '</tbody></table>';
@@ -1215,6 +1324,9 @@ async function loadSuppliers(){
         try { await api('/suppliers/'+btn.dataset.delSupplier, {method:'DELETE'}); loadSuppliers(); }
         catch(e){ alert(e.message); }
       };
+    });
+    el.querySelectorAll('[data-supplier-statement]').forEach(btn => {
+      btn.onclick = () => downloadAuth('/suppliers/'+btn.dataset.supplierStatement+'/statement.pdf', 'supplier-statement-'+btn.dataset.supplierName+'.pdf');
     });
     el.querySelectorAll('[data-supplier-details]').forEach(btn => {
       btn.onclick = () => toggleSupplierDetails(btn.dataset.supplierDetails);
@@ -3257,6 +3369,347 @@ app.patch('/api/superadmin/organizations/:id/status', requireAuth, requireRole('
   const { data, error } = await supabase.from('cst_organizations').update({ is_active }).eq('id', req.params.id).select().single();
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
+});
+
+// =====================================================================
+// Finance tools: payments ledger, supplier statements, site budgets,
+// wage payment results (with retry) and finance summary PDF.
+// =====================================================================
+const FIN_ROLES = ['finance', 'manager', 'admin'];
+const kes = n => 'KES ' + Number(n || 0).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+// Run an .in() query in chunks so long id lists never exceed URL limits.
+async function inChunks(table, select, column, ids, extra) {
+  const out = [];
+  for (let i = 0; i < ids.length; i += 100) {
+    let q = supabase.from(table).select(select).in(column, ids.slice(i, i + 100));
+    if (extra) q = extra(q);
+    const { data, error } = await q;
+    if (error) throw new Error(error.message);
+    out.push(...(data || []));
+  }
+  return out;
+}
+
+// Simple paginated PDF table (header repeats on each page).
+function pdfTable(doc, startY, cols, rows, opts = {}) {
+  const rowH = opts.rowHeight || 20, fontSize = opts.fontSize || 8;
+  const tableW = cols.reduce((s, c) => s + c.width, 0);
+  let y = startY;
+  const drawHeader = () => {
+    doc.rect(PDF_LEFT, y, tableW, 20).fillAndStroke('#e2f1e8', PDF_FOREST);
+    doc.font('Helvetica-Bold').fontSize(fontSize).fillColor(PDF_FOREST);
+    let x = PDF_LEFT;
+    cols.forEach(c => { doc.text(c.label, x + 4, y + 6, { width: c.width - 8, align: c.align || 'left', lineBreak: false }); x += c.width; });
+    y += 20;
+  };
+  drawHeader();
+  rows.forEach((r, idx) => {
+    if (y + rowH > 800) { doc.addPage(); y = 50; drawHeader(); }
+    if (idx % 2 === 1) doc.rect(PDF_LEFT, y, tableW, rowH).fill('#f7faf8');
+    doc.font(r.bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(fontSize).fillColor('#222');
+    let x = PDF_LEFT;
+    cols.forEach((c, i) => {
+      doc.text(String(r.cells[i] == null ? '' : r.cells[i]), x + 4, y + 6, { width: c.width - 8, align: c.align || 'left', height: rowH - 4, ellipsis: true, lineBreak: false });
+      x += c.width;
+    });
+    doc.moveTo(PDF_LEFT, y + rowH).lineTo(PDF_LEFT + tableW, y + rowH).strokeColor('#e3e3e3').lineWidth(0.5).stroke();
+    y += rowH;
+  });
+  doc.lineWidth(1);
+  return y;
+}
+
+// ---------- 1. Payments ledger ----------
+async function getLedger(req) {
+  const from = req.query.from || null, to = req.query.to || null;
+  const q = String(req.query.q || '').toLowerCase().trim();
+
+  let tq = supabase.from('cst_transactions').select('id, category, description, amount, paid_at, transaction_date').eq('status', 'paid').order('paid_at', { ascending: false });
+  tq = await scopeToSites(tq, req.user);
+  const { data: txns, error } = await tq;
+  if (error) throw new Error(error.message);
+  // Weekly wage runs are shown per worker below, so skip the summary transaction to avoid double counting.
+  const expenses = (txns || []).filter(t => !(t.category === 'labor' && /^Weekly wages /.test(t.description || '')));
+
+  const links = expenses.length ? await inChunks('cst_transaction_vendors', 'transaction_id, vendor:vendor_id(name)', 'transaction_id', expenses.map(t => t.id)) : [];
+  const payeeByTxn = {};
+  for (const l of links) if (l.vendor && l.vendor.name) payeeByTxn[l.transaction_id] = l.vendor.name;
+
+  let wq = supabase.from('cst_wage_payments').select('id, total_amount, paid_at, week_start, week_end, days_present, disbursement_status, mpesa_receipt, worker:worker_id(name, phone_number)').neq('disbursement_status', 'failed').order('paid_at', { ascending: false });
+  wq = await scopeToSites(wq, req.user);
+  const { data: wages, error: wErr } = await wq;
+  if (wErr) throw new Error(wErr.message);
+
+  let rows = [];
+  for (const t of expenses) rows.push({
+    date: t.paid_at || t.transaction_date, type: 'Expense', payee: payeeByTxn[t.id] || '', category: t.category,
+    description: t.description || '', amount: Number(t.amount) || 0, method: 'Recorded', reference: String(t.id).slice(0, 8)
+  });
+  for (const w of (wages || [])) rows.push({
+    date: w.paid_at, type: 'Wages', payee: (w.worker && w.worker.name) || '', category: 'labor',
+    description: 'Wages ' + w.week_start + ' to ' + w.week_end + ' (' + w.days_present + ' days)', amount: Number(w.total_amount) || 0,
+    method: w.disbursement_status === 'confirmed' || w.disbursement_status === 'sent' ? 'M-Pesa' : 'Recorded', reference: w.mpesa_receipt || ''
+  });
+  rows = rows.filter(r => {
+    const d = r.date ? String(r.date).slice(0, 10) : '';
+    if (from && d < from) return false;
+    if (to && d > to) return false;
+    if (q && !(r.payee + ' ' + r.description + ' ' + r.category + ' ' + r.reference + ' ' + r.type).toLowerCase().includes(q)) return false;
+    return true;
+  });
+  rows.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+  return { rows, total: rows.reduce((s, r) => s + r.amount, 0) };
+}
+
+app.get('/api/ledger', requireAuth, requireRole(...FIN_ROLES), async (req, res) => {
+  try { res.json(await getLedger(req)); } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/ledger/export', requireAuth, requireRole(...FIN_ROLES), async (req, res) => {
+  try {
+    const { rows, total } = await getLedger(req);
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Construction Site Transactions';
+    const ws = wb.addWorksheet('Payments Ledger');
+    ws.columns = [
+      { header: 'Date', key: 'date', width: 14 }, { header: 'Type', key: 'type', width: 10 }, { header: 'Paid to', key: 'payee', width: 26 },
+      { header: 'Category', key: 'category', width: 14 }, { header: 'Description', key: 'description', width: 50 },
+      { header: 'Method', key: 'method', width: 12 }, { header: 'Reference', key: 'reference', width: 16 }, { header: 'Amount (KES)', key: 'amount', width: 16 }
+    ];
+    ws.getRow(1).font = { bold: true };
+    rows.forEach(r => ws.addRow({ ...r, date: r.date ? String(r.date).slice(0, 10) : '' }));
+    ws.getColumn('amount').numFmt = '#,##0.00';
+    const t = ws.addRow({ description: 'TOTAL PAID', amount: total }); t.font = { bold: true };
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="payments-ledger.xlsx"');
+    await wb.xlsx.write(res); res.end();
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/ledger.pdf', requireAuth, requireRole(...FIN_ROLES), async (req, res) => {
+  try {
+    const { rows, total } = await getLedger(req);
+    const branding = await fetchOrgBranding(req);
+    const doc = new PDFDocument({ margin: 40, size: 'A4' });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'attachment; filename="payments-ledger.pdf"');
+    doc.pipe(res);
+    drawFormHeader(doc, 'Payments Ledger', 'Every payment made', branding);
+    const info = ['Period:  ' + (req.query.from || 'all time') + '  to  ' + (req.query.to || 'today') + (req.query.q ? '      Search: ' + req.query.q : ''),
+      'Payments: ' + rows.length + '          Total paid: ' + kes(total) + '          Generated: ' + new Date().toLocaleString('en-KE')];
+    const y = drawInfoBox(doc, 130, info) + 14;
+    const cols = [{ label: 'Date', width: 55 }, { label: 'Type', width: 45 }, { label: 'Paid to', width: 105 }, { label: 'Description', width: 175 }, { label: 'Method', width: 50 }, { label: 'Amount (KES)', width: 85, align: 'right' }];
+    const body = rows.map(r => ({ cells: [r.date ? String(r.date).slice(0, 10) : '', r.type, r.payee, r.description, r.method, Number(r.amount).toLocaleString('en-KE', { minimumFractionDigits: 2 })] }));
+    body.push({ bold: true, cells: ['', '', '', 'TOTAL PAID', '', Number(total).toLocaleString('en-KE', { minimumFractionDigits: 2 })] });
+    const end = pdfTable(doc, y, cols, body);
+    drawFormFooter(doc, Math.min(end + 14, 800), 'Generated automatically from payment records.');
+    doc.end();
+  } catch (e) { if (!res.headersSent) res.status(500).send('Could not generate ledger: ' + e.message); else res.end(); }
+});
+
+// ---------- 2. Supplier statement PDF ----------
+app.get('/api/suppliers/:id/statement.pdf', requireAuth, requireRole(...FIN_ROLES), async (req, res) => {
+  try {
+    let vq = supabase.from('cst_vendors').select('*').eq('id', req.params.id);
+    vq = await scopeToSites(vq, req.user);
+    const { data: supplier } = await vq.maybeSingle();
+    if (!supplier) return res.status(404).send('Supplier not found');
+
+    const { data: moves } = await supabase.from('cst_store_movements').select('created_at, quantity, reason, item:item_id(name, unit)').eq('supplier_id', supplier.id).eq('movement_type', 'in').order('created_at');
+    const { data: links } = await supabase.from('cst_transaction_vendors').select('transaction_id, supplied_item').eq('vendor_id', supplier.id);
+    const txns = (links && links.length) ? await inChunks('cst_transactions', 'id, description, amount, status, transaction_date, paid_at', 'id', links.map(l => l.transaction_id)) : [];
+    const suppliedBy = {}; for (const l of (links || [])) suppliedBy[l.transaction_id] = l.supplied_item;
+    txns.sort((a, b) => String(a.transaction_date).localeCompare(String(b.transaction_date)));
+
+    let billed = 0, paid = 0, owed = 0;
+    for (const t of txns) {
+      const a = Number(t.amount) || 0;
+      if (t.status === 'paid') { paid += a; billed += a; }
+      else if (t.status === 'pending' || t.status === 'approved') { owed += a; billed += a; }
+    }
+
+    const branding = await fetchOrgBranding(req);
+    const doc = new PDFDocument({ margin: 40, size: 'A4' });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'attachment; filename="supplier-statement-' + supplier.name.replace(/[^a-zA-Z0-9]+/g, '-') + '.pdf"');
+    doc.pipe(res);
+    drawFormHeader(doc, 'Supplier Statement', 'Deliveries, payments and balance', branding);
+    let y = drawInfoBox(doc, 130, [
+      'Supplier:  ' + supplier.name + '          Contact:  ' + [supplier.contact_phone, supplier.contact_email].filter(Boolean).join(' / '),
+      'Statement date:  ' + new Date().toLocaleDateString('en-KE') + '          Total billed: ' + kes(billed) + '          Paid: ' + kes(paid) + '          OUTSTANDING: ' + kes(owed)
+    ]) + 16;
+
+    doc.font('Helvetica-Bold').fontSize(11).fillColor(PDF_FOREST).text('Deliveries to site', PDF_LEFT, y); y += 16;
+    const dRows = (moves || []).map(m => ({ cells: [String(m.created_at).slice(0, 10), m.item ? m.item.name : '', Number(m.quantity) + ' ' + (m.item ? m.item.unit : ''), m.reason || ''] }));
+    if (!dRows.length) dRows.push({ cells: ['', 'No deliveries recorded', '', ''] });
+    y = pdfTable(doc, y, [{ label: 'Date', width: 70 }, { label: 'Material', width: 200 }, { label: 'Quantity', width: 90 }, { label: 'Note', width: 155 }], dRows) + 18;
+
+    if (y > 700) { doc.addPage(); y = 50; }
+    doc.font('Helvetica-Bold').fontSize(11).fillColor(PDF_FOREST).text('Invoices and payments', PDF_LEFT, y); y += 16;
+    const tRows = txns.map(t => ({ cells: [String(t.transaction_date).slice(0, 10), (suppliedBy[t.id] ? suppliedBy[t.id] + ' - ' : '') + (t.description || ''), t.status.toUpperCase(), t.status === 'paid' ? String(t.paid_at || '').slice(0, 10) : '', Number(t.amount).toLocaleString('en-KE', { minimumFractionDigits: 2 })] }));
+    if (!tRows.length) tRows.push({ cells: ['', 'No transactions linked yet', '', '', ''] });
+    tRows.push({ bold: true, cells: ['', 'Total billed (excluding rejected)', '', '', Number(billed).toLocaleString('en-KE', { minimumFractionDigits: 2 })] });
+    tRows.push({ bold: true, cells: ['', 'Paid', '', '', Number(paid).toLocaleString('en-KE', { minimumFractionDigits: 2 })] });
+    tRows.push({ bold: true, cells: ['', 'Still owed (pending + approved)', '', '', Number(owed).toLocaleString('en-KE', { minimumFractionDigits: 2 })] });
+    y = pdfTable(doc, y, [{ label: 'Date', width: 65 }, { label: 'Description', width: 210 }, { label: 'Status', width: 60 }, { label: 'Paid on', width: 65 }, { label: 'Amount (KES)', width: 115, align: 'right' }], tRows);
+    drawFormFooter(doc, Math.min(y + 14, 800), 'Generated automatically. Rejected items are not counted in the balance.');
+    doc.end();
+  } catch (e) { if (!res.headersSent) res.status(500).send('Could not generate statement: ' + e.message); else res.end(); }
+});
+
+// ---------- 3. Site budget ----------
+async function resolveBudgetSite(req) {
+  if (req.user.site_id) return req.user.site_id;
+  const ids = await getOrgSiteIds(req.user.organization_id);
+  const wanted = req.query.site_id || req.body?.site_id;
+  if (wanted) return ids.includes(wanted) ? wanted : null;
+  return ids[0] || null;
+}
+async function computeBudget(siteId) {
+  const [{ data: site }, { data: b }, { data: txns }] = await Promise.all([
+    supabase.from('cst_sites').select('id, name').eq('id', siteId).maybeSingle(),
+    supabase.from('cst_site_budgets').select('*').eq('site_id', siteId).maybeSingle(),
+    supabase.from('cst_transactions').select('amount, status').eq('site_id', siteId)
+  ]);
+  let paid = 0, approved = 0, pending = 0;
+  for (const t of (txns || [])) {
+    const a = Number(t.amount) || 0;
+    if (t.status === 'paid') paid += a; else if (t.status === 'approved') approved += a; else if (t.status === 'pending') pending += a;
+  }
+  const budget = b ? Number(b.budget_amount) : null, warn = b ? b.warn_percent : 80;
+  const used = paid + approved;
+  const percent = budget ? (used / budget) * 100 : null;
+  let level = 'none';
+  if (budget) level = percent >= 100 ? 'over' : percent >= warn ? 'warning' : 'ok';
+  return { site_id: siteId, site_name: site ? site.name : '', budget_amount: budget, warn_percent: warn, paid, approved_unpaid: approved, pending, used, remaining: budget == null ? null : budget - used, percent_used: percent, level };
+}
+app.get('/api/budget', requireAuth, requireRole(...FIN_ROLES), async (req, res) => {
+  try {
+    const siteId = await resolveBudgetSite(req);
+    if (!siteId) return res.status(400).json({ error: 'No site found for your account' });
+    res.json(await computeBudget(siteId));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.put('/api/budget', requireAuth, requireRole('manager', 'admin'), async (req, res) => {
+  try {
+    const siteId = await resolveBudgetSite(req);
+    if (!siteId) return res.status(400).json({ error: 'No site found for your account' });
+    const amount = Number(req.body.budget_amount), warn = Number(req.body.warn_percent || 80);
+    if (!(amount >= 0) || !isFinite(amount)) return res.status(400).json({ error: 'Enter a valid budget amount' });
+    if (!(warn >= 1 && warn <= 100)) return res.status(400).json({ error: 'Warning level must be between 1 and 100' });
+    const { error } = await supabase.from('cst_site_budgets').upsert({ site_id: siteId, budget_amount: amount, warn_percent: Math.round(warn), updated_by: req.user.id, updated_at: new Date().toISOString() });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(await computeBudget(siteId));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ---------- 4. Wage payment results + retry failed ----------
+app.get('/api/wages/results', requireAuth, requireRole(...FIN_ROLES), async (req, res) => {
+  try {
+    const { start, end } = await computeWeeklyWages(req);
+    let q = supabase.from('cst_wage_payments').select('id, total_amount, days_present, paid_at, disbursement_status, mpesa_receipt, mpesa_result_desc, worker:worker_id(name, phone_number, designation)').eq('week_start', start).order('paid_at', { ascending: false });
+    q = await scopeToSites(q, req.user);
+    const { data, error } = await q;
+    if (error) return res.status(500).json({ error: error.message });
+    const counts = { confirmed: 0, sent: 0, failed: 0, not_attempted: 0 };
+    let failedTotal = 0;
+    for (const r of (data || [])) { counts[r.disbursement_status] = (counts[r.disbursement_status] || 0) + 1; if (r.disbursement_status === 'failed') failedTotal += Number(r.total_amount) || 0; }
+    res.json({ start, end, rows: data || [], counts, failed_total: failedTotal, mpesa_enabled: mpesaConfigured() });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/wages/weekly/retry-failed', requireAuth, requireRole('finance', 'admin'), async (req, res) => {
+  try {
+    if (!mpesaConfigured()) return res.status(400).json({ error: 'M-Pesa is not set up on this system, so there is nothing to retry.' });
+    const { start, end } = await computeWeeklyWages(req);
+    let q = supabase.from('cst_wage_payments').select('id, total_amount, worker:worker_id(name, phone_number)').eq('week_start', start).eq('disbursement_status', 'failed');
+    q = await scopeToSites(q, req.user);
+    const { data: failed, error } = await q;
+    if (error) return res.status(500).json({ error: error.message });
+    if (!failed.length) return res.json({ ok: true, retried: 0, results: [], message: 'No failed payments for this week.' });
+
+    const results = [];
+    for (const p of failed) {
+      const phone = p.worker && p.worker.phone_number;
+      if (!phone) { results.push({ name: p.worker ? p.worker.name : '?', ok: false, error: 'No phone number on file' }); continue; }
+      let status = 'failed', convId = null, desc = null;
+      try {
+        const b2c = await sendB2CPayment({ phone, amount: Number(p.total_amount), remarks: 'Wages ' + start + ' to ' + end + ' (retry)', occasion: p.worker.name, callbackHost: req.get('host') });
+        status = b2c.ok ? 'sent' : 'failed';
+        convId = b2c.data.ConversationID || null;
+        desc = b2c.data.ResponseDescription || b2c.data.errorMessage || JSON.stringify(b2c.data);
+      } catch (e) { desc = e.message; }
+      await supabase.from('cst_wage_payments').update({ disbursement_status: status, mpesa_conversation_id: convId, mpesa_result_desc: desc, paid_by: req.user.id, paid_at: new Date().toISOString() }).eq('id', p.id);
+      results.push({ name: p.worker.name, ok: status === 'sent', status, detail: desc });
+    }
+    res.json({ ok: true, retried: failed.length, sent: results.filter(r => r.ok).length, results });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ---------- 5. Finance summary PDF (daily / weekly / monthly) ----------
+app.get('/api/reports/finance-summary.pdf', requireAuth, requireRole(...FIN_ROLES), async (req, res) => {
+  try {
+    const period = ['daily', 'weekly', 'monthly'].includes(req.query.period) ? req.query.period : 'weekly';
+    const endDate = /^\d{4}-\d{2}-\d{2}$/.test(req.query.date || '') ? req.query.date : new Date().toISOString().slice(0, 10);
+    const e = new Date(endDate + 'T00:00:00Z');
+    const s = new Date(e);
+    if (period === 'weekly') s.setUTCDate(s.getUTCDate() - 6);
+    else if (period === 'monthly') s.setUTCDate(1);
+    const from = s.toISOString().slice(0, 10), to = endDate;
+
+    let tq = supabase.from('cst_transactions').select('category, description, amount, status, transaction_date, paid_at').gte('transaction_date', from).lte('transaction_date', to);
+    tq = await scopeToSites(tq, req.user);
+    const { data: txns, error } = await tq;
+    if (error) throw new Error(error.message);
+    let oq = supabase.from('cst_transactions').select('amount, status').in('status', ['pending', 'approved']);
+    oq = await scopeToSites(oq, req.user);
+    const { data: open } = await oq;
+    let wq = supabase.from('cst_wage_payments').select('total_amount, disbursement_status').neq('disbursement_status', 'failed').gte('paid_at', from + 'T00:00:00Z').lte('paid_at', to + 'T23:59:59Z');
+    wq = await scopeToSites(wq, req.user);
+    const { data: wages } = await wq;
+
+    const by = { pending: [0, 0], approved: [0, 0], paid: [0, 0], rejected: [0, 0] };
+    const cat = {};
+    for (const t of (txns || [])) {
+      const a = Number(t.amount) || 0;
+      if (by[t.status]) { by[t.status][0]++; by[t.status][1] += a; }
+      if (t.status === 'paid') cat[t.category] = (cat[t.category] || 0) + a;
+    }
+    const openTotal = (open || []).reduce((s2, t) => s2 + (Number(t.amount) || 0), 0);
+    const wagesTotal = (wages || []).reduce((s2, w) => s2 + (Number(w.total_amount) || 0), 0);
+
+    let budget = null;
+    try { const sid = await resolveBudgetSite(req); if (sid) budget = await computeBudget(sid); } catch {}
+
+    const branding = await fetchOrgBranding(req);
+    const doc = new PDFDocument({ margin: 40, size: 'A4' });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'attachment; filename="finance-summary-' + period + '-' + to + '.pdf"');
+    doc.pipe(res);
+    drawFormHeader(doc, period.charAt(0).toUpperCase() + period.slice(1) + ' Finance Summary', 'Pending, approved, paid and rejected totals', branding);
+    let y = drawInfoBox(doc, 130, ['Period:  ' + from + '  to  ' + to, 'Generated:  ' + new Date().toLocaleString('en-KE') + '          Waiting to be paid (all time, pending + approved): ' + kes(openTotal)]) + 16;
+
+    doc.font('Helvetica-Bold').fontSize(11).fillColor(PDF_FOREST).text('Transactions by status', PDF_LEFT, y); y += 16;
+    const money2 = n => Number(n).toLocaleString('en-KE', { minimumFractionDigits: 2 });
+    const stRows = ['pending', 'approved', 'paid', 'rejected'].map(k => ({ cells: [k.toUpperCase(), by[k][0], money2(by[k][1])] }));
+    stRows.push({ bold: true, cells: ['TOTAL', Object.values(by).reduce((s2, v) => s2 + v[0], 0), money2(Object.values(by).reduce((s2, v) => s2 + v[1], 0))] });
+    y = pdfTable(doc, y, [{ label: 'Status', width: 200 }, { label: 'Count', width: 100, align: 'right' }, { label: 'Amount (KES)', width: 215, align: 'right' }], stRows, { rowHeight: 22, fontSize: 9 }) + 18;
+
+    doc.font('Helvetica-Bold').fontSize(11).fillColor(PDF_FOREST).text('Paid, by category', PDF_LEFT, y); y += 16;
+    const cRows = Object.entries(cat).map(([k, v]) => ({ cells: [k, money2(v)] }));
+    if (!cRows.length) cRows.push({ cells: ['No payments in this period', ''] });
+    y = pdfTable(doc, y, [{ label: 'Category', width: 300 }, { label: 'Paid (KES)', width: 215, align: 'right' }], cRows, { rowHeight: 20, fontSize: 9 }) + 18;
+
+    doc.font('Helvetica').fontSize(10).fillColor('#222').text('Worker wages paid this period: ' + kes(wagesTotal) + ' (' + (wages || []).length + ' payments)', PDF_LEFT, y); y += 22;
+    if (budget && budget.budget_amount != null) {
+      const lvl = budget.level === 'over' ? 'OVER BUDGET' : budget.level === 'warning' ? 'WARNING - nearly used up' : 'On track';
+      doc.font('Helvetica-Bold').fontSize(11).fillColor(PDF_FOREST).text('Site budget (' + budget.site_name + ')', PDF_LEFT, y); y += 16;
+      doc.font('Helvetica').fontSize(10).fillColor('#222').text('Budget: ' + kes(budget.budget_amount) + '     Used (paid + approved): ' + kes(budget.used) + ' (' + budget.percent_used.toFixed(1) + '%)     Remaining: ' + kes(budget.remaining) + '     Status: ' + lvl, PDF_LEFT, y, { width: PDF_RIGHT - PDF_LEFT }); y += 30;
+    }
+    drawFormFooter(doc, Math.min(y + 10, 800), 'Generated automatically from transaction and wage records.');
+    doc.end();
+  } catch (e) { if (!res.headersSent) res.status(500).send('Could not generate summary: ' + e.message); else res.end(); }
 });
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
