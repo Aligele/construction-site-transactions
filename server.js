@@ -444,9 +444,9 @@ function buildTransactionsHtml(user){
   let html = '';
   html += '<div class="card"><h2>Offline form</h2><p class="muted">No network on site? Download a blank printable form, fill it by hand, and enter it into the app (or upload a photo below) once you\\'re back online.</p><button class="secondary" id="downloadFormBtn">Download blank form (PDF)</button></div>';
   if (user.role==='clerk' || user.role==='admin') {
-    html += '<div class="card"><h2>Log transactions</h2><p class="muted">Add materials, labor, fuel, etc. as separate line items, then submit them together — the total goes to your manager and finance in one notification.</p>'+(user.site_id ? '<input id="site_id" type="hidden" value="'+user.site_id+'" />' : '<div class="row"><div><label>Site ID</label><input id="site_id" placeholder="site UUID" /></div></div>')+'<div id="itemRows"></div><div style="margin-top:8px;"><button class="secondary" id="addItemBtn" type="button">+ Add item</button></div><div class="topbar" style="margin-top:14px;"><strong>Total: <span id="batchTotal">KES 0.00</span></strong><button id="submitBatch">Submit all</button></div><div class="error" id="submitErr"></div></div>';
+    html += '<div class="card"><h2>Log transactions</h2><p class="muted">Add materials, labor, fuel, etc. as separate line items, then submit them together — the total goes to your manager and finance in one notification.</p>'+(user.site_id ? '<input id="site_id" type="hidden" value="'+user.site_id+'" />' : '<div class="row"><div><label>Site ID</label><input id="site_id" placeholder="site UUID" /></div></div>')+'<div id="itemRows"></div><div style="margin-top:8px;"><button class="secondary" id="addItemBtn" type="button">+ Add item</button></div><div class="topbar" style="margin-top:14px;"><strong>Total: <span id="batchTotal">KES 0.00</span></strong><button id="submitBatch">Submit all</button></div><div class="muted" id="outboxNote"></div><div class="error" id="submitErr"></div></div>';
   }
-  html += '<div class="card"><div class="topbar"><h2>Transactions</h2><div>'+(['manager','finance','admin'].includes(user.role)?'<button id="exportBtn" class="secondary">Download Excel</button>':'')+(['manager','admin'].includes(user.role)?' <button id="clearAllBtn" class="danger">Clear all data</button>':'')+'</div></div>' +
+  html += '<div class="card"><div class="topbar"><h2>'+(user.role==='clerk'?'My submissions':'Transactions')+'</h2><div>'+(['manager','finance','admin'].includes(user.role)?'<button id="exportBtn" class="secondary">Download Excel</button>':'')+(['manager','admin'].includes(user.role)?' <button id="clearAllBtn" class="danger">Clear all data</button>':'')+'</div></div>' +
     '<div class="row" style="margin-top:6px;"><input id="filterSearch" placeholder="Search description..." /><select id="filterStatus"><option value="">All statuses</option><option value="pending">Pending</option><option value="approved">Approved</option><option value="paid">Paid</option><option value="rejected">Rejected</option></select><input id="filterFrom" type="date" /><input id="filterTo" type="date" /><button class="secondary" id="filterApply">Filter</button></div>' +
     '<div id="table"></div><div id="pagination" class="row" style="margin-top:10px;justify-content:flex-end;"></div></div>';
   html += '<div class="card"><h2>Documents</h2><p class="muted">Upload photos or scans of filled forms, receipts, or other paper records.</p><div class="row"><input id="docFile" type="file" accept="image/*,.pdf" /><input id="docDesc" placeholder="Short description (optional)" /></div><div style="margin-top:10px;"><button id="uploadDocBtn">Upload</button></div><div class="error" id="docErr"></div><div id="docList" class="muted" style="margin-top:12px;">Loading...</div></div>';
@@ -498,6 +498,7 @@ function buildStoreHtml(user){
       '<div class="row"><div><label>Material (existing)</label><select id="dv_item"><option value="">— or type a new one below —</option></select></div><div><label>New material name</label><input id="dv_new_item" placeholder="e.g. Cement (50kg bags)" /></div><div><label>Unit (for new material)</label><input id="dv_new_unit" placeholder="e.g. bags, liters" /></div></div>' +
       '<div class="row"><div><label>Quantity delivered</label><input id="dv_qty" type="number" step="0.01" /></div><div><label>Amount owed (KES)</label><input id="dv_amount" type="number" step="0.01" /></div></div>' +
       '<label>Note (optional)</label><input id="dv_note" placeholder="e.g. delivery note number" style="width:100%;" />' +
+      '<label style="margin-top:8px;">Delivery note photo (optional)</label><input id="dv_photo" type="file" accept="image/*" />' +
       '<div style="margin-top:12px;"><button id="recordDeliveryBtn">Record delivery</button></div><div class="error" id="deliveryErr"></div><div class="muted" id="deliveryOk"></div></div>';
   }
   if (canManage) {
@@ -620,6 +621,9 @@ async function renderDashboard(){
         (['manager','finance','admin'].includes(user.role) ? '<a class="nav-item" id="navAnalytics" data-view="analytics"><span class="nav-icon">&#128202;</span> Analytics</a>' : '') +
         (['manager','finance','admin'].includes(user.role) ? '<a class="nav-item" id="navSuppliers" data-view="suppliers"><span class="nav-icon">&#127981;</span> Suppliers</a>' : '') +
         (['manager','finance','admin'].includes(user.role) ? '<a class="nav-item" id="navPayments" data-view="payments"><span class="nav-icon">&#128179;</span> Payments</a>' : '') +
+        (['manager','admin'].includes(user.role) ? '<a class="nav-item" id="navApprovals" data-view="approvals"><span class="nav-icon">&#9989;</span> Approvals</a>' : '') +
+        (['manager','admin'].includes(user.role) ? '<a class="nav-item" id="navReports" data-view="reports"><span class="nav-icon">&#128196;</span> Reports</a>' : '') +
+        (['manager','admin'].includes(user.role) ? '<a class="nav-item" id="navAudit" data-view="audit"><span class="nav-icon">&#128214;</span> Audit trail</a>' : '') +
         (['clerk','finance','manager','admin'].includes(user.role) ? '<a class="nav-item" id="navTransactions" data-view="transactions"><span class="nav-icon">&#128203;</span> Transactions</a>' : '') +
         (['clerk','finance','manager','admin'].includes(user.role) ? '<a class="nav-item" id="navRegistry" data-view="registry"><span class="nav-icon">&#128101;</span> Registry</a>' : '') +
         (['storekeeper','finance','manager','admin'].includes(user.role) ? '<a class="nav-item" id="navStore" data-view="store"><span class="nav-icon">&#128230;</span> Store</a>' : '') +
@@ -658,6 +662,9 @@ async function renderDashboard(){
     else if (view === 'analytics') html = buildAnalyticsHtml(user);
     else if (view === 'suppliers') html = buildSuppliersHtml(user);
     else if (view === 'payments') html = buildPaymentsHtml(user);
+    else if (view === 'approvals') html = buildApprovalsHtml(user);
+    else if (view === 'reports') html = buildReportsHtml(user);
+    else if (view === 'audit') html = buildAuditHtml(user);
     content.innerHTML = html;
     wireContent();
     closeSidebar();
@@ -671,6 +678,7 @@ async function renderDashboard(){
   function wireContent(){
     if (document.getElementById('summaryBox')) loadSummary();
     if (document.getElementById('ledgerBox')) wirePayments();
+    if (document.getElementById('approvalsBox') || document.getElementById('reportsBox') || document.getElementById('auditBox')) wireManagerTools();
     if (document.getElementById('queuePending')) loadApprovalQueues();
     if (document.getElementById('notifList')) loadNotifications();
     if (document.getElementById('userList')) loadUsers();
@@ -724,7 +732,17 @@ async function renderDashboard(){
         try {
           await api('/deliveries', {method:'POST', body: JSON.stringify({supplier_id, new_supplier_name, item_id, new_item_name, new_item_unit, quantity, amount, description})});
           document.getElementById('deliveryErr').textContent = '';
-          document.getElementById('deliveryOk').textContent = 'Delivery recorded — stock updated and a pending payment was sent for approval.';
+          const photo = document.getElementById('dv_photo');
+          let photoMsg = '';
+          if (photo && photo.files[0]) {
+            const supSel = document.getElementById('dv_supplier'), itSel = document.getElementById('dv_item');
+            const supName = new_supplier_name || (supSel.selectedOptions[0] ? supSel.selectedOptions[0].text : '');
+            const itName = new_item_name || (itSel.selectedOptions[0] ? itSel.selectedOptions[0].text : '');
+            const fd = new FormData(); fd.append('file', photo.files[0]); fd.append('description', 'Delivery note - ' + supName + ' - ' + itName + (description ? ' - ' + description : ''));
+            try { const up = await fetch(API+'/documents', {method:'POST', headers:{Authorization:'Bearer '+state.token}, body: fd}); photoMsg = up.ok ? ' Delivery note photo saved under Documents.' : ' (The photo could not be saved - upload it under Documents.)'; } catch(e2) { photoMsg = ' (The photo could not be saved - upload it under Documents.)'; }
+            photo.value = '';
+          }
+          document.getElementById('deliveryOk').textContent = 'Delivery recorded - stock updated and a pending payment was sent for approval.' + photoMsg;
           ['dv_new_supplier','dv_new_item','dv_new_unit','dv_qty','dv_amount','dv_note'].forEach(id => document.getElementById(id).value = '');
           loadStoreItems();
         } catch(e) { document.getElementById('deliveryErr').textContent = e.message; document.getElementById('deliveryOk').textContent=''; }
@@ -863,11 +881,11 @@ async function renderDashboard(){
       document.getElementById('submitAttendance').onclick = async () => {
         const attendance_date = document.getElementById('attDate').value;
         const worker_ids = Array.from(document.querySelectorAll('[data-worker-check]:checked')).map(cb => cb.dataset.workerCheck);
-        if (worker_ids.length === 0) { document.getElementById('attendanceErr').textContent = 'Select at least one worker.'; return; }
+        if (worker_ids.length === 0 && !confirm('No one is marked present. Clear all attendance for this date?')) return;
         try {
-          const result = await api('/attendance', {method:'POST', body: JSON.stringify({attendance_date, worker_ids})});
+          const result = await api('/attendance', {method:'POST', body: JSON.stringify({attendance_date, worker_ids, replace: true})});
           document.getElementById('attendanceErr').textContent = '';
-          document.getElementById('attendanceOk').textContent = 'Attendance recorded for '+result.recorded+' worker(s) on '+result.date+'.';
+          document.getElementById('attendanceOk').textContent = 'Attendance saved: '+result.recorded+' worker(s) present on '+result.date+'. You can change it and save again to correct mistakes.';
         } catch(e) { document.getElementById('attendanceErr').textContent = e.message; document.getElementById('attendanceOk').textContent=''; }
       };
     }
@@ -921,9 +939,22 @@ async function renderDashboard(){
         let total = 0;
         document.querySelectorAll('[data-item-amt]').forEach(inp => { total += Number(inp.value) || 0; });
         document.getElementById('batchTotal').textContent = money(total);
+        saveDraft();
       }
       document.getElementById('addItemBtn').onclick = addItemRow;
       addItemRow(); // start with one row
+      try {
+        const dr = JSON.parse(localStorage.getItem(draftKey()) || 'null');
+        if (dr && dr.length) {
+          document.getElementById('itemRows').innerHTML = ''; itemCounter = 0;
+          dr.forEach(function(it){ addItemRow(); document.getElementById('itemCat-'+itemCounter).value = it.c; document.getElementById('itemDesc-'+itemCounter).value = it.d; document.getElementById('itemAmt-'+itemCounter).value = it.a; });
+          updateBatchTotal();
+          document.getElementById('submitErr').textContent = 'Your unsent entries were restored.';
+        }
+      } catch(e){}
+      document.getElementById('itemRows').addEventListener('input', saveDraft);
+      document.getElementById('itemRows').addEventListener('change', saveDraft);
+      showOutboxNote(); flushOutbox();
 
       document.getElementById('submitBatch').onclick = async () => {
         const site_id = document.getElementById('site_id').value.trim();
@@ -949,7 +980,14 @@ async function renderDashboard(){
           updateBatchTotal();
           if (document.getElementById('table')) loadTable();
           loadSummary();
-        } catch(e){ document.getElementById('submitErr').textContent = e.message; }
+        } catch(e){
+          if (e instanceof TypeError || !navigator.onLine) {
+            const q = outboxGet(); q.push({site_id, items}); outboxSet(q);
+            document.getElementById('itemRows').innerHTML = ''; itemCounter = 0; addItemRow(); updateBatchTotal();
+            document.getElementById('submitErr').textContent = '';
+            showOutboxNote();
+          } else { document.getElementById('submitErr').textContent = e.message; }
+        }
       };
     }
     if (document.getElementById('exportBtn')) {
@@ -1037,9 +1075,10 @@ async function loadTable(){
   if (from_date) params.set('from_date', from_date);
   if (to_date) params.set('to_date', to_date);
   const { rows, total } = await api('/transactions?'+params.toString());
+  window.__txnCache = {}; rows.forEach(t => { window.__txnCache[t.id] = t; });
   let html = '<table><thead><tr><th>Date</th><th>Category</th><th>Description</th><th>Amount</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
   rows.forEach(t => {
-    html += '<tr><td>'+t.transaction_date+'</td><td>'+t.category+'</td><td>'+t.description+'</td><td>'+money(t.amount)+'</td><td>'+badge(t.status)+'</td><td class="actions">'+actionButtons(t,user)+' <button class="secondary" data-details="'+t.id+'">Details</button></td></tr>';
+    html += '<tr><td>'+t.transaction_date+'</td><td>'+t.category+'</td><td>'+escHtml(t.description)+(t.status==='rejected'&&t.rejection_reason?'<div style="color:#b03a3a;font-size:12px;margin-top:4px;">Rejected: '+escHtml(t.rejection_reason)+'</div>':'')+'</td><td>'+money(t.amount)+'</td><td>'+badge(t.status)+'</td><td class="actions">'+actionButtons(t,user)+' <button class="secondary" data-details="'+t.id+'">Details</button></td></tr>';
     html += '<tr id="details-'+t.id+'" style="display:none;"><td colspan="6"><div id="details-body-'+t.id+'" class="muted">Loading...</div></td></tr>';
     html += '<tr id="edit-'+t.id+'" style="display:none;"><td colspan="6"><div class="row"><div><label>Description</label><input id="editDesc-'+t.id+'" value="'+t.description.replace(/"/g,'&quot;')+'" /></div><div><label>Amount</label><input id="editAmount-'+t.id+'" type="number" step="0.01" value="'+t.amount+'" /></div><div><label>Status</label><select id="editStatus-'+t.id+'"><option value="pending"'+(t.status==='pending'?' selected':'')+'>Pending</option><option value="approved"'+(t.status==='approved'?' selected':'')+'>Approved</option><option value="rejected"'+(t.status==='rejected'?' selected':'')+'>Rejected</option><option value="paid"'+(t.status==='paid'?' selected':'')+'>Paid</option></select></div></div><div style="margin-top:8px;"><button data-save-edit="'+t.id+'">Save</button> <button class="secondary" data-cancel-edit="'+t.id+'">Cancel</button></div></td></tr>';
   });
@@ -1068,6 +1107,15 @@ async function loadTable(){
     btn.onclick = async () => {
       if (!confirm('Delete this transaction permanently? This cannot be undone.')) return;
       try { await api('/transactions/'+btn.dataset.delete, {method:'DELETE'}); loadTable(); loadSummary(); }
+      catch(e){ alert(e.message); }
+    };
+  });
+  document.querySelectorAll('[data-resubmit]').forEach(btn => {
+    btn.onclick = async () => {
+      const t = window.__txnCache[btn.dataset.resubmit]; if (!t) return;
+      const description = prompt('Correct the description:', t.description); if (description === null) return;
+      const amount = prompt('Correct the amount (KES):', t.amount); if (amount === null) return;
+      try { await api('/transactions/'+t.id+'/resubmit', {method:'POST', body: JSON.stringify({description, amount})}); loadTable(); loadSummary(); }
       catch(e){ alert(e.message); }
     };
   });
@@ -1101,6 +1149,7 @@ function actionButtons(t,user){
   }
   if (t.status==='approved' && (user.role==='finance'||user.role==='admin')) b += '<button data-action="pay" data-id="'+t.id+'">Mark Paid</button>';
   if (t.status==='paid') b += '<button class="secondary" data-receipt="'+t.id+'">Receipt</button>';
+  if (user.role==='clerk' && t.status==='rejected') b += '<button data-resubmit="'+t.id+'">Edit and resubmit</button>';
   if (user.role==='manager' || user.role==='admin') {
     b += '<button class="secondary" data-edit="'+t.id+'">Edit</button>';
     b += '<button class="danger" data-delete="'+t.id+'">Delete</button>';
@@ -1305,6 +1354,143 @@ function wirePayments(){
     downloadAuth('/reports/finance-summary.pdf?period=' + p + '&date=' + d, 'finance-summary-' + p + '-' + d + '.pdf');
   };
 }
+// ----- Clerk: drafts and offline outbox -----
+function draftKey(){ return 'cst_draft_' + (state.user ? state.user.id : ''); }
+function outboxKey(){ return 'cst_outbox_' + (state.user ? state.user.id : ''); }
+function saveDraft(){
+  try {
+    var items = [];
+    document.querySelectorAll('#itemRows > div').forEach(function(row){
+      var n = row.id.replace('itemRow-','');
+      items.push({c: document.getElementById('itemCat-'+n).value, d: document.getElementById('itemDesc-'+n).value, a: document.getElementById('itemAmt-'+n).value});
+    });
+    var any = items.some(function(i){ return i.d || i.a; });
+    if (any) localStorage.setItem(draftKey(), JSON.stringify(items)); else localStorage.removeItem(draftKey());
+  } catch(e){}
+}
+function outboxGet(){ try { return JSON.parse(localStorage.getItem(outboxKey()) || '[]'); } catch(e){ return []; } }
+function outboxSet(a){ try { localStorage.setItem(outboxKey(), JSON.stringify(a)); } catch(e){} }
+function showOutboxNote(){
+  var el = document.getElementById('outboxNote'); if (!el) return;
+  var n = outboxGet().length;
+  el.textContent = n ? (n + ' entr' + (n === 1 ? 'y is' : 'ies are') + ' saved on this phone and will be sent automatically when the network is back.') : '';
+}
+async function flushOutbox(){
+  if (!state.token || !state.user || !navigator.onLine) return;
+  var q = outboxGet(); if (!q.length) return;
+  var left = [], sent = 0;
+  for (var i = 0; i < q.length; i++) {
+    try { await api('/batches', {method:'POST', body: JSON.stringify(q[i])}); sent++; }
+    catch(e) {
+      if (e instanceof TypeError) { left = left.concat(q.slice(i)); break; }
+      alert('A saved entry could not be sent: ' + e.message);
+    }
+  }
+  outboxSet(left); showOutboxNote();
+  if (sent) { if (document.getElementById('table')) loadTable(); }
+}
+window.addEventListener('online', flushOutbox);
+
+// ----- Workers: edit and history -----
+async function editWorker(id, done){
+  var w = (window.__workers || []).filter(function(x){ return x.id === id; })[0]; if (!w) return;
+  var name = prompt('Full name:', w.name); if (name === null) return;
+  var phone = prompt('Phone number (07xxxxxxxx):', w.phone_number || ''); if (phone === null) return;
+  var designation = prompt('Designation:', w.designation || ''); if (designation === null) return;
+  var rate = prompt('Daily rate (KES):', w.daily_rate || 0); if (rate === null) return;
+  try { await api('/workers/' + id, {method:'PATCH', body: JSON.stringify({name: name, phone_number: phone, designation: designation, daily_rate: rate})}); if (done) done(); }
+  catch(e){ alert(e.message); }
+}
+async function showWorkerHistory(id){
+  try {
+    var h = await api('/workers/' + id + '/history');
+    var w = h.worker;
+    var ov = document.createElement('div');
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9998;display:flex;align-items:flex-start;justify-content:center;overflow:auto;padding:20px;';
+    var wages = h.wages.length ? '<div style="overflow-x:auto;"><table><thead><tr><th>Week</th><th>Days</th><th>Amount</th><th>Status</th></tr></thead><tbody>' + h.wages.map(function(x){ return '<tr><td>' + x.week_start + '</td><td>' + x.days_present + '</td><td>' + money(x.total_amount) + '</td><td>' + escHtml(x.disbursement_status || '') + (x.mpesa_receipt ? '<br/><span class="muted">' + escHtml(x.mpesa_receipt) + '</span>' : '') + '</td></tr>'; }).join('') + '</tbody></table></div>' : '<p class="muted">No wage payments yet.</p>';
+    var recent = h.attendance.slice(0, 60).map(function(d){ return '<span class="badge paid" style="margin:2px;display:inline-block;">' + d + '</span>'; }).join('');
+    ov.innerHTML = '<div class="card" style="max-width:640px;width:100%;margin-top:20px;"><div class="topbar"><h2>' + escHtml(w.name) + '</h2><button class="secondary" id="closeHist">Close</button></div>' +
+      '<p class="muted">' + escHtml(w.designation || '') + ' - ID ' + escHtml(w.id_number || '') + ' - ' + escHtml(w.phone_number || 'no phone') + ' - ' + money(w.daily_rate) + ' per day</p>' +
+      '<div class="row"><div><div class="muted">Days present (on record)</div><strong>' + h.days_total + '</strong></div><div><div class="muted">Total paid</div><strong>' + money(h.paid_total) + '</strong></div></div>' +
+      '<h3 style="margin-top:14px;">Wage payments</h3>' + wages + '<h3 style="margin-top:14px;">Recent days present</h3><div>' + (recent || '<span class="muted">None yet.</span>') + '</div></div>';
+    document.body.appendChild(ov);
+    ov.querySelector('#closeHist').onclick = function(){ ov.remove(); };
+    ov.onclick = function(e){ if (e.target === ov) ov.remove(); };
+  } catch(e){ alert(e.message); }
+}
+
+// ----- Manager: approvals inbox, reports, audit trail -----
+function buildApprovalsHtml(user){
+  return '<div class="card" id="approvalsBox"><h2>Approvals inbox</h2><p class="muted">Everything waiting for your approval. Tick items, then approve or reject them together.</p><div id="approvalsList"><div class="skeleton" style="width:80%;"></div></div>' +
+    '<div class="topbar" style="margin-top:12px;"><strong>Selected: <span id="apSelTotal">KES 0.00</span></strong><div style="display:flex;gap:8px;flex-wrap:wrap;"><button class="success" id="apApproveBtn">Approve selected</button><button class="danger" id="apRejectBtn">Reject selected</button></div></div><div class="error" id="apErr"></div><div class="muted" id="apOk"></div></div>';
+}
+async function loadApprovals(){
+  var el = document.getElementById('approvalsList'); if (!el) return;
+  try {
+    var r = await api('/transactions?status=pending&limit=200');
+    var rows = r.rows.filter(function(t){ return !t.manager_approved; });
+    window.__apRows = rows;
+    if (!rows.length) { el.innerHTML = '<p class="muted">Nothing is waiting for your approval.</p>'; apTotal(); return; }
+    var all = rows.reduce(function(s, t){ return s + Number(t.amount); }, 0);
+    el.innerHTML = '<div class="muted" style="margin-bottom:6px;">' + rows.length + ' item(s), total ' + money(all) + '</div><div style="overflow-x:auto;"><table><thead><tr><th><input type="checkbox" id="apAll" /></th><th>Date</th><th>Category</th><th>Description</th><th style="text-align:right;">Amount</th></tr></thead><tbody>' +
+      rows.map(function(t){ return '<tr><td><input type="checkbox" data-ap="' + t.id + '" /></td><td>' + t.transaction_date + '</td><td>' + escHtml(t.category) + '</td><td>' + escHtml(t.description) + '</td><td style="text-align:right;font-weight:600;">' + money(t.amount) + '</td></tr>'; }).join('') + '</tbody></table></div>';
+    document.getElementById('apAll').onchange = function(){ var on = this.checked; el.querySelectorAll('[data-ap]').forEach(function(c){ c.checked = on; }); apTotal(); };
+    el.querySelectorAll('[data-ap]').forEach(function(c){ c.onchange = apTotal; });
+    apTotal();
+  } catch(e){ el.textContent = 'Could not load approvals.'; }
+}
+function apSelected(){ return Array.prototype.slice.call(document.querySelectorAll('[data-ap]:checked')).map(function(c){ return c.dataset.ap; }); }
+function apTotal(){
+  var ids = apSelected(), sum = 0;
+  (window.__apRows || []).forEach(function(t){ if (ids.indexOf(t.id) >= 0) sum += Number(t.amount); });
+  var el = document.getElementById('apSelTotal'); if (el) el.textContent = money(sum) + ' (' + ids.length + ')';
+}
+async function apRun(action){
+  var ids = apSelected(), err = document.getElementById('apErr'), ok = document.getElementById('apOk');
+  err.textContent = ''; ok.textContent = '';
+  if (!ids.length) { err.textContent = 'Tick at least one item first.'; return; }
+  var body = {};
+  if (action === 'reject') { var reason = prompt('Reason for rejecting (the clerk will see this):'); if (reason === null) return; body.reason = reason; }
+  else if (!confirm('Approve ' + ids.length + ' item(s)?')) return;
+  var done = 0, failed = 0;
+  for (var i = 0; i < ids.length; i++) {
+    try { await api('/transactions/' + ids[i] + '/' + (action === 'reject' ? 'reject' : 'approve/manager'), {method:'POST', body: JSON.stringify(body)}); done++; } catch(e){ failed++; }
+  }
+  ok.textContent = done + ' item(s) ' + (action === 'reject' ? 'rejected' : 'approved') + (failed ? ', ' + failed + ' could not be updated.' : '.');
+  loadApprovals();
+}
+function buildReportsHtml(user){
+  return '<div class="card" id="reportsBox"><h2>Site activity report (PDF)</h2><p class="muted">Attendance, expenses, deliveries and stock used, in one printable report.</p>' +
+    '<div class="row"><div><label>Report type</label><select id="actPeriod"><option value="daily">Daily</option><option value="weekly" selected>Weekly (last 7 days)</option></select></div><div><label>Up to date</label><input id="actDate" type="date" /></div></div>' +
+    '<div style="margin-top:10px;"><button id="actPdfBtn">Download site activity report</button></div></div>';
+}
+function buildAuditHtml(user){
+  return '<div class="card" id="auditBox"><h2>Audit trail</h2><p class="muted">Who approved, edited, deleted or changed what, and when.</p>' +
+    '<div class="row"><div><label>From</label><input id="auFrom" type="date" /></div><div><label>To</label><input id="auTo" type="date" /></div><div><label>Search</label><input id="auQ" placeholder="name, action or detail" /></div></div>' +
+    '<div style="margin:10px 0;"><button id="auGo">Search</button></div><div id="auList"><div class="skeleton" style="width:80%;"></div></div></div>';
+}
+async function loadAudit(){
+  var el = document.getElementById('auList'); if (!el) return;
+  var p = [], f = document.getElementById('auFrom').value, t = document.getElementById('auTo').value, q = document.getElementById('auQ').value.trim();
+  if (f) p.push('from=' + encodeURIComponent(f)); if (t) p.push('to=' + encodeURIComponent(t)); if (q) p.push('q=' + encodeURIComponent(q));
+  try {
+    var rows = await api('/audit' + (p.length ? '?' + p.join('&') : ''));
+    if (!rows.length) { el.innerHTML = '<p class="muted">No activity found. Actions are recorded from now on.</p>'; return; }
+    el.innerHTML = '<div style="overflow-x:auto;"><table><thead><tr><th>When</th><th>Who</th><th>Action</th><th>Details</th></tr></thead><tbody>' +
+      rows.map(function(r){ return '<tr><td>' + escHtml(new Date(r.created_at).toLocaleString()) + '</td><td>' + escHtml(r.actor_name || '') + '<br/><span class="muted">' + escHtml(r.actor_role || '') + '</span></td><td>' + escHtml(String(r.action).split('_').join(' ')) + '</td><td class="muted">' + escHtml(r.detail || '') + '</td></tr>'; }).join('') + '</tbody></table></div>';
+  } catch(e){ el.textContent = 'Could not load the audit trail.'; }
+}
+function wireManagerTools(){
+  var ab = document.getElementById('apApproveBtn');
+  if (ab) { loadApprovals(); ab.onclick = function(){ apRun('approve'); }; document.getElementById('apRejectBtn').onclick = function(){ apRun('reject'); }; }
+  var ap = document.getElementById('actPdfBtn');
+  if (ap) {
+    document.getElementById('actDate').value = new Date().toISOString().slice(0,10);
+    ap.onclick = function(){ var p = document.getElementById('actPeriod').value, d = document.getElementById('actDate').value; downloadAuth('/reports/site-activity.pdf?period=' + p + '&date=' + d, 'site-activity-' + p + '-' + d + '.pdf'); };
+  }
+  var ag = document.getElementById('auGo');
+  if (ag) { loadAudit(); ag.onclick = loadAudit; }
+}
 async function loadSuppliers(){
   const el = document.getElementById('supplierList');
   const canDelete = ['manager','admin'].includes(state.user.role);
@@ -1488,9 +1674,18 @@ async function loadWorkerAttendanceView(){
     const [workers, marked] = await Promise.all([ api('/workers'), api('/attendance?date='+date) ]);
     if (!workers.length) { el.textContent = 'No workers enrolled yet.'; return; }
     const markedIds = new Set(marked.map(m => m.worker_id));
-    el.innerHTML = '<p class="muted">'+marked.length+' of '+workers.length+' present on '+date+'</p><table><thead><tr><th>Name</th><th>ID number</th><th>Designation</th><th>Status</th></tr></thead><tbody>' +
-      workers.map(w => '<tr><td>'+w.name+'</td><td>'+w.id_number+'</td><td>'+w.designation+'</td><td>'+(markedIds.has(w.id)?'<span class="badge paid">present</span>':'<span class="badge rejected">absent</span>')+'</td></tr>').join('') +
+    window.__workers = workers;
+    const canEditW = ['manager','admin'].includes(state.user.role);
+    el.innerHTML = '<div class="row" style="margin-bottom:8px;"><input id="workerSearchV" placeholder="Search by name or ID number..." /></div><p class="muted">'+marked.length+' of '+workers.length+' present on '+date+'</p><table><thead><tr><th>Name</th><th>ID number</th><th>Designation</th><th>Status</th><th></th></tr></thead><tbody>' +
+      workers.map(w => '<tr data-search="'+escHtml((w.name+' '+w.id_number).toLowerCase())+'"><td>'+escHtml(w.name)+'</td><td>'+escHtml(w.id_number)+'</td><td>'+escHtml(w.designation)+'</td><td>'+(markedIds.has(w.id)?'<span class="badge paid">present</span>':'<span class="badge rejected">absent</span>')+'</td><td class="actions"><button class="secondary" data-hist-worker="'+w.id+'">History</button>'+(canEditW?' <button class="secondary" data-edit-workerv="'+w.id+'">Edit</button> <button class="danger" data-del-workerv="'+w.id+'">Remove</button>':'')+'</td></tr>').join('') +
       '</tbody></table>';
+    document.getElementById('workerSearchV').oninput = function(){ const q = this.value.toLowerCase().trim(); el.querySelectorAll('tr[data-search]').forEach(r => { r.style.display = r.dataset.search.indexOf(q) >= 0 ? '' : 'none'; }); };
+    el.querySelectorAll('[data-hist-worker]').forEach(b => { b.onclick = () => showWorkerHistory(b.dataset.histWorker); });
+    el.querySelectorAll('[data-edit-workerv]').forEach(b => { b.onclick = () => editWorker(b.dataset.editWorkerv, loadWorkerAttendanceView); });
+    el.querySelectorAll('[data-del-workerv]').forEach(b => { b.onclick = async () => {
+      if (!confirm('Remove this worker from the registry? Their attendance records will also be removed.')) return;
+      try { await api('/workers/'+b.dataset.delWorkerv, {method:'DELETE'}); loadWorkerAttendanceView(); } catch(e){ alert(e.message); }
+    }; });
   } catch(e) { el.textContent = 'Could not load attendance.'; }
 }
 async function loadWorkerAttendance(){
@@ -1500,9 +1695,23 @@ async function loadWorkerAttendance(){
     const [workers, marked] = await Promise.all([ api('/workers'), api('/attendance?date='+date) ]);
     if (!workers.length) { el.textContent = 'No workers enrolled yet — add one above.'; return; }
     const markedIds = new Set(marked.map(m => m.worker_id));
-    el.innerHTML = '<table><thead><tr><th></th><th>Name</th><th>ID number</th><th>Designation</th><th></th></tr></thead><tbody>' +
-      workers.map(w => '<tr><td><input type="checkbox" data-worker-check="'+w.id+'" '+(markedIds.has(w.id)?'checked':'')+' /></td><td>'+w.name+'</td><td>'+w.id_number+'</td><td>'+w.designation+'</td><td><button class="danger" style="padding:4px 8px;font-size:12px;" data-remove-worker="'+w.id+'">remove</button></td></tr>').join('') +
+    window.__workers = workers;
+    el.innerHTML = '<div class="row" style="margin-bottom:8px;"><input id="workerSearch" placeholder="Search by name or ID number..." /></div><div style="margin-bottom:8px;display:flex;gap:8px;flex-wrap:wrap;"><button class="secondary" id="markAllBtn" type="button">Mark all present</button><button class="secondary" id="sameYesterdayBtn" type="button">Same as yesterday</button><button class="secondary" id="clearMarksBtn" type="button">Clear all</button></div><table><thead><tr><th></th><th>Name</th><th>ID number</th><th>Designation</th><th></th></tr></thead><tbody>' +
+      workers.map(w => '<tr data-search="'+escHtml((w.name+' '+w.id_number).toLowerCase())+'"><td><input type="checkbox" data-worker-check="'+w.id+'" '+(markedIds.has(w.id)?'checked':'')+' /></td><td>'+w.name+'</td><td>'+w.id_number+'</td><td>'+w.designation+'</td><td><button class="secondary" style="padding:4px 8px;font-size:12px;" data-edit-worker="'+w.id+'">edit</button> <button class="danger" style="padding:4px 8px;font-size:12px;" data-remove-worker="'+w.id+'">remove</button></td></tr>').join('') +
       '</tbody></table>';
+    document.getElementById('workerSearch').oninput = function(){ const q = this.value.toLowerCase().trim(); el.querySelectorAll('tr[data-search]').forEach(r => { r.style.display = r.dataset.search.indexOf(q) >= 0 ? '' : 'none'; }); };
+    document.getElementById('markAllBtn').onclick = () => el.querySelectorAll('[data-worker-check]').forEach(c => { if (c.closest('tr').style.display !== 'none') c.checked = true; });
+    document.getElementById('clearMarksBtn').onclick = () => el.querySelectorAll('[data-worker-check]').forEach(c => { c.checked = false; });
+    document.getElementById('sameYesterdayBtn').onclick = async () => {
+      const d = new Date(document.getElementById('attDate').value + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() - 1);
+      try {
+        const prev = await api('/attendance?date=' + d.toISOString().slice(0,10));
+        const ids = new Set(prev.map(m => m.worker_id));
+        if (!ids.size) { alert('No attendance was recorded for the day before.'); return; }
+        el.querySelectorAll('[data-worker-check]').forEach(c => { c.checked = ids.has(c.dataset.workerCheck); });
+      } catch(e){ alert(e.message); }
+    };
+    el.querySelectorAll('[data-edit-worker]').forEach(btn => { btn.onclick = () => editWorker(btn.dataset.editWorker, loadWorkerAttendance); });
     el.querySelectorAll('[data-remove-worker]').forEach(btn => {
       btn.onclick = async () => {
         if (!confirm('Remove this worker from the registry?')) return;
@@ -1551,11 +1760,13 @@ async function loadStoreItems(){
   try {
     const items = await api('/store/items');
     if (!items.length) { el.textContent = 'No materials tracked yet.'; return; }
-    el.innerHTML = '<table><thead><tr><th>Material</th><th>Stock In</th><th>Stock Out</th><th>Remaining</th><th>Reorder at</th><th>Actions</th></tr></thead><tbody>' +
+    const lowItems = items.filter(i => i.reorder_level && Number(i.quantity_in_stock) <= Number(i.reorder_level));
+    const lowBanner = lowItems.length ? '<div style="background:#fbeaea;color:#b03a3a;padding:10px 12px;border-radius:8px;margin-bottom:10px;font-weight:600;">Low stock: ' + lowItems.map(i => escHtml(i.name) + ' (' + i.quantity_in_stock + ' ' + escHtml(i.unit) + ' left)').join(', ') + '</div>' : '';
+    el.innerHTML = lowBanner + '<table><thead><tr><th>Material</th><th>Stock In</th><th>Stock Out</th><th>Remaining</th><th>Reorder at</th><th>Actions</th></tr></thead><tbody>' +
       items.map(i => {
         const low = i.reorder_level && Number(i.quantity_in_stock) <= Number(i.reorder_level);
         return '<tr><td>'+i.name+'</td><td>'+i.total_in+' '+i.unit+'</td><td>'+i.total_out+' '+i.unit+'</td><td>'+(low?'<span class="badge rejected">':'<strong>')+i.quantity_in_stock+' '+i.unit+(low?'</span>':'</strong>')+'</td><td>'+(i.reorder_level||'—')+'</td>' +
-          '<td class="actions">'+(canManage?'<button class="success" data-move-in="'+i.id+'">Stock in</button> ':'')+(low&&canReceive?'<button class="secondary" data-reorder="'+i.id+'">Request reorder</button> ':'')+(canManage?'<button class="danger" data-move-out="'+i.id+'">Stock out</button>':'')+(canDelete?' <button class="secondary" data-del-item="'+i.id+'">Remove</button>':'')+'</td></tr>';
+          '<td class="actions">'+(canManage?'<button class="success" data-move-in="'+i.id+'">Stock in</button> ':'')+(low&&canReceive?'<button class="secondary" data-reorder="'+i.id+'">Request reorder</button> ':'')+(canManage?'<button class="danger" data-move-out="'+i.id+'">Stock out</button> <button class="secondary" data-count-item="'+i.id+'">Count</button>':'')+(canDelete?' <button class="secondary" data-del-item="'+i.id+'">Remove</button>':'')+'</td></tr>';
       }).join('') +
       '</tbody></table>';
 
@@ -1588,9 +1799,21 @@ async function loadStoreItems(){
         const id = btn.dataset.moveOut;
         const quantity = prompt('Quantity to record OUT (used/issued):');
         if (!quantity) return;
-        const reason = prompt('Reason / note (optional):') || '';
-        try { await api('/store/items/'+id+'/movement', {method:'POST', body: JSON.stringify({movement_type:'out', quantity, reason})}); loadStoreItems(); }
+        const issued_to = prompt('Issued to (worker or team name):'); if (!issued_to) return;
+        const used_for = prompt('Used for (task or area, e.g. Block A foundation):') || '';
+        try { await api('/store/items/'+id+'/movement', {method:'POST', body: JSON.stringify({movement_type:'out', quantity, issued_to, used_for})}); loadStoreItems(); }
         catch(e){ alert(e.message); }
+      };
+    });
+    el.querySelectorAll('[data-count-item]').forEach(btn => {
+      btn.onclick = async () => {
+        const counted = prompt('Physical count: how many are actually in the store right now?'); if (counted === null || counted === '') return;
+        const reason = prompt('Note (optional, e.g. damaged, miscounted earlier):') || '';
+        try {
+          const r = await api('/store/items/'+btn.dataset.countItem+'/count', {method:'POST', body: JSON.stringify({counted, reason})});
+          alert(r.difference === 0 ? 'The count matches the system. No change needed.' : 'Stock corrected by ' + (r.difference > 0 ? '+' : '') + r.difference + '. The difference was logged.');
+          loadStoreItems();
+        } catch(e){ alert(e.message); }
       };
     });
     el.querySelectorAll('[data-del-item]').forEach(btn => {
@@ -1883,6 +2106,201 @@ app.get('/reset', (req, res) => {
 });
 
 // ---------- Batch submission (multiple line items at once, e.g. materials + labor + fuel) ----------
+// =====================================================================
+// Role improvements: tenant-isolation guard, audit trail, clerk resubmit,
+// worker edit/history, attendance corrections, stock count, site activity PDF.
+// =====================================================================
+
+// Every /:id route on these resources first checks that the record belongs to the caller's site/company.
+function scopeGuard(table) {
+  return (req, res, next) => requireAuth(req, res, async () => {
+    try {
+      const id = req.params.id;
+      if (!/^[0-9a-f-]{36}$/i.test(id)) return next();
+      const { data: row } = await supabase.from(table).select('site_id').eq('id', id).maybeSingle();
+      if (!row) return next();
+      if (req.user.role === 'superadmin') return next();
+      if (req.user.role === 'admin') {
+        const ids = await getOrgSiteIds(req.user.organization_id);
+        return ids.includes(row.site_id) ? next() : res.status(404).json({ error: 'Not found' });
+      }
+      if (row.site_id && row.site_id === req.user.site_id) return next();
+      return res.status(404).json({ error: 'Not found' });
+    } catch (e) { return res.status(500).json({ error: e.message }); }
+  });
+}
+app.use('/api/transactions/:id', scopeGuard('cst_transactions'));
+app.use('/api/workers/:id', scopeGuard('cst_workers'));
+app.use('/api/store/items/:id', scopeGuard('cst_store_items'));
+app.use('/api/suppliers/:id', scopeGuard('cst_vendors'));
+
+// Best-effort audit trail: never blocks or fails the real action.
+function audit(req, action, entity, entityId, detail) {
+  try {
+    Promise.resolve(supabase.from('cst_audit_log').insert({
+      organization_id: req.user.organization_id || null, site_id: req.user.site_id || null, actor_id: req.user.id,
+      actor_name: req.user.full_name || null, actor_role: req.user.role, action, entity: entity || null,
+      entity_id: entityId ? String(entityId) : null, detail: detail ? String(detail).slice(0, 500) : null
+    })).catch(() => {});
+  } catch {}
+}
+
+async function lowStockAlert(item, newQty) {
+  if (item.reorder_level && newQty <= Number(item.reorder_level)) {
+    const { data: recipients } = await supabase.from('cst_users').select('id').eq('site_id', item.site_id).in('role', ['manager', 'storekeeper']);
+    for (const r of (recipients || [])) await notify(r.id, null, 'batch_submitted', 'Low stock alert: "' + item.name + '" is down to ' + newQty + ' ' + item.unit + ' (reorder level: ' + item.reorder_level + ').');
+  }
+}
+
+// ----- Clerk: fix and resubmit a rejected transaction -----
+app.post('/api/transactions/:id/resubmit', requireAuth, requireRole('clerk'), async (req, res) => {
+  const { data: txn } = await supabase.from('cst_transactions').select('*').eq('id', req.params.id).maybeSingle();
+  if (!txn || txn.created_by !== req.user.id) return res.status(404).json({ error: 'Transaction not found' });
+  if (txn.status !== 'rejected') return res.status(400).json({ error: 'Only rejected transactions can be resubmitted' });
+  const description = String(req.body.description || txn.description).trim();
+  const amount = Number(req.body.amount || txn.amount);
+  if (!description || !(amount > 0)) return res.status(400).json({ error: 'Enter a description and an amount above 0' });
+  const { data, error } = await supabase.from('cst_transactions').update({
+    description, amount, status: 'pending', manager_approved: false, manager_approved_by: null, manager_approved_at: null,
+    finance_approved: false, finance_approved_by: null, finance_approved_at: null,
+    rejected_by: null, rejected_at: null, rejection_reason: null, updated_at: new Date().toISOString()
+  }).eq('id', txn.id).select().single();
+  if (error) return res.status(500).json({ error: error.message });
+  const { data: recipients } = await supabase.from('cst_users').select('id').eq('site_id', txn.site_id).in('role', ['manager', 'finance']);
+  for (const r of (recipients || [])) await notify(r.id, txn.id, 'batch_submitted', 'A clerk corrected and resubmitted a rejected transaction: "' + description + '" (KES ' + amount.toLocaleString() + ').');
+  audit(req, 'resubmit_transaction', 'transaction', txn.id, description + ' KES ' + amount);
+  res.json(data);
+});
+
+// ----- Workers: edit + history -----
+app.patch('/api/workers/:id', requireAuth, requireRole('clerk', 'manager', 'admin'), async (req, res) => {
+  const updates = {};
+  for (const k of ['name', 'id_number', 'phone_number', 'designation']) if (req.body[k] !== undefined) updates[k] = String(req.body[k]).trim() || null;
+  if (req.body.daily_rate !== undefined) {
+    const r = Number(req.body.daily_rate);
+    if (!(r >= 0) || !isFinite(r)) return res.status(400).json({ error: 'Enter a valid daily rate' });
+    updates.daily_rate = r;
+  }
+  if ((updates.name === null) || (updates.designation === null) || (updates.id_number === null)) return res.status(400).json({ error: 'Name, ID number and designation cannot be empty' });
+  if (!Object.keys(updates).length) return res.status(400).json({ error: 'Nothing to update' });
+  const { data, error } = await supabase.from('cst_workers').update(updates).eq('id', req.params.id).select().single();
+  if (error) {
+    if (error.message.includes('duplicate')) return res.status(409).json({ error: 'Another worker already has that ID number' });
+    return res.status(500).json({ error: error.message });
+  }
+  audit(req, 'edit_worker', 'worker', req.params.id, JSON.stringify(updates));
+  res.json(data);
+});
+
+app.get('/api/workers/:id/history', requireAuth, requireRole('manager', 'finance', 'admin'), async (req, res) => {
+  try {
+    const { data: worker } = await supabase.from('cst_workers').select('*').eq('id', req.params.id).maybeSingle();
+    if (!worker) return res.status(404).json({ error: 'Worker not found' });
+    const { data: att } = await supabase.from('cst_attendance').select('attendance_date').eq('worker_id', worker.id).order('attendance_date', { ascending: false }).limit(366);
+    const { data: wages } = await supabase.from('cst_wage_payments').select('week_start, week_end, days_present, daily_rate, total_amount, paid_at, disbursement_status, mpesa_receipt').eq('worker_id', worker.id).order('week_start', { ascending: false }).limit(52);
+    const paid = (wages || []).filter(w => w.disbursement_status !== 'failed').reduce((s, w) => s + (Number(w.total_amount) || 0), 0);
+    res.json({ worker, attendance: (att || []).map(a => a.attendance_date), days_total: (att || []).length, wages: wages || [], paid_total: paid });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ----- Stock count (physical count vs system) -----
+app.post('/api/store/items/:id/count', requireAuth, requireRole('storekeeper', 'admin'), async (req, res) => {
+  const counted = Number(req.body.counted);
+  const note = String(req.body.reason || '').trim();
+  if (req.body.counted === '' || req.body.counted == null || !(counted >= 0) || !isFinite(counted)) return res.status(400).json({ error: 'Enter the counted quantity (0 or more)' });
+  const { data: item } = await supabase.from('cst_store_items').select('*').eq('id', req.params.id).maybeSingle();
+  if (!item) return res.status(404).json({ error: 'Item not found' });
+  const before = Number(item.quantity_in_stock), diff = counted - before;
+  if (diff === 0) return res.json({ item, difference: 0, message: 'The count matches the system. No change needed.' });
+  const { error: updErr } = await supabase.from('cst_store_items').update({ quantity_in_stock: counted, updated_at: new Date().toISOString() }).eq('id', item.id);
+  if (updErr) return res.status(500).json({ error: updErr.message });
+  await supabase.from('cst_store_movements').insert({
+    item_id: item.id, site_id: item.site_id, movement_type: diff > 0 ? 'in' : 'out', quantity: Math.abs(diff),
+    reason: 'Stock count adjustment: system ' + before + ', counted ' + counted + (note ? ' - ' + note : ''), recorded_by: req.user.id
+  });
+  audit(req, 'stock_count', 'store_item', item.id, item.name + ': system ' + before + ' -> counted ' + counted + (note ? ' (' + note + ')' : ''));
+  await lowStockAlert(item, counted);
+  res.json({ item: { ...item, quantity_in_stock: counted }, difference: diff });
+});
+
+// ----- Audit trail -----
+app.get('/api/audit', requireAuth, requireRole('manager', 'admin'), async (req, res) => {
+  let q = supabase.from('cst_audit_log').select('*').order('created_at', { ascending: false }).limit(300);
+  if (req.user.role === 'admin') q = q.eq('organization_id', req.user.organization_id);
+  else q = q.eq('site_id', req.user.site_id);
+  if (req.query.from) q = q.gte('created_at', req.query.from + 'T00:00:00Z');
+  if (req.query.to) q = q.lte('created_at', req.query.to + 'T23:59:59Z');
+  const text = String(req.query.q || '').replace(/[^a-zA-Z0-9 _-]/g, '').trim();
+  if (text) q = q.or('action.ilike.%' + text + '%,detail.ilike.%' + text + '%,actor_name.ilike.%' + text + '%');
+  const { data, error } = await q;
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data || []);
+});
+
+// ----- Site activity report (PDF): attendance, expenses, deliveries, stock issued -----
+function reportRange(period, dateStr) {
+  const endDate = /^\d{4}-\d{2}-\d{2}$/.test(dateStr || '') ? dateStr : new Date().toISOString().slice(0, 10);
+  const s = new Date(endDate + 'T00:00:00Z');
+  if (period === 'weekly') s.setUTCDate(s.getUTCDate() - 6);
+  return { from: s.toISOString().slice(0, 10), to: endDate };
+}
+app.get('/api/reports/site-activity.pdf', requireAuth, requireRole('manager', 'finance', 'admin'), async (req, res) => {
+  try {
+    const period = req.query.period === 'daily' ? 'daily' : 'weekly';
+    const { from, to } = reportRange(period, req.query.date);
+    const n2 = n => Number(n).toLocaleString('en-KE', { minimumFractionDigits: 2 });
+
+    let wq = supabase.from('cst_workers').select('id, name, designation'); wq = await scopeToSites(wq, req.user);
+    const { data: workers } = await wq;
+    let aq = supabase.from('cst_attendance').select('worker_id, attendance_date').gte('attendance_date', from).lte('attendance_date', to); aq = await scopeToSites(aq, req.user);
+    const { data: att } = await aq;
+    let tq = supabase.from('cst_transactions').select('category, description, amount, status, transaction_date').gte('transaction_date', from).lte('transaction_date', to).order('transaction_date'); tq = await scopeToSites(tq, req.user);
+    const { data: txns } = await tq;
+    let mq = supabase.from('cst_store_movements').select('created_at, movement_type, quantity, reason, issued_to, used_for, item:item_id(name, unit), supplier:supplier_id(name)').gte('created_at', from + 'T00:00:00Z').lte('created_at', to + 'T23:59:59Z').order('created_at'); mq = await scopeToSites(mq, req.user);
+    const { data: moves } = await mq;
+
+    const nameOf = {}; for (const w of (workers || [])) nameOf[w.id] = w;
+    const perDay = {}, perWorker = {};
+    for (const a of (att || [])) { perDay[a.attendance_date] = (perDay[a.attendance_date] || 0) + 1; perWorker[a.worker_id] = (perWorker[a.worker_id] || 0) + 1; }
+
+    const branding = await fetchOrgBranding(req);
+    const doc = new PDFDocument({ margin: 40, size: 'A4' });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'attachment; filename="site-activity-' + period + '-' + to + '.pdf"');
+    doc.pipe(res);
+    drawFormHeader(doc, (period === 'daily' ? 'Daily' : 'Weekly') + ' Site Activity Report', 'Attendance, expenses, deliveries and stock used', branding);
+    let y = drawInfoBox(doc, 130, ['Period:  ' + from + '  to  ' + to + '          Workers enrolled: ' + (workers || []).length, 'Generated:  ' + new Date().toLocaleString('en-KE')]) + 16;
+    const heading = t => { if (y > 730) { doc.addPage(); y = 50; } doc.font('Helvetica-Bold').fontSize(11).fillColor(PDF_FOREST).text(t, PDF_LEFT, y); y += 16; };
+
+    heading('Attendance');
+    const aRows = Object.keys(perDay).sort().map(d => ({ cells: [d, perDay[d] + ' present', Math.max(0, (workers || []).length - perDay[d]) + ' absent'] }));
+    if (!aRows.length) aRows.push({ cells: ['No attendance recorded', '', ''] });
+    y = pdfTable(doc, y, [{ label: 'Date', width: 150 }, { label: 'Present', width: 180 }, { label: 'Absent', width: 185 }], aRows) + 8;
+    const wRows = (workers || []).filter(w => perWorker[w.id]).sort((a, b) => perWorker[b.id] - perWorker[a.id]).map(w => ({ cells: [w.name, w.designation || '', perWorker[w.id] + ' day(s)'] }));
+    if (wRows.length) { y = pdfTable(doc, y, [{ label: 'Worker', width: 220 }, { label: 'Designation', width: 160 }, { label: 'Days present', width: 135 }], wRows) + 18; } else y += 10;
+
+    heading('Expenses');
+    const exp = (txns || []).filter(t => t.status !== 'rejected');
+    const eRows = exp.map(t => ({ cells: [t.transaction_date, t.category, t.description, t.status.toUpperCase(), n2(t.amount)] }));
+    eRows.push({ bold: true, cells: ['', '', 'TOTAL (excluding rejected)', '', n2(exp.reduce((s, t) => s + (Number(t.amount) || 0), 0))] });
+    y = pdfTable(doc, y, [{ label: 'Date', width: 62 }, { label: 'Category', width: 62 }, { label: 'Description', width: 218 }, { label: 'Status', width: 55 }, { label: 'Amount (KES)', width: 118, align: 'right' }], eRows) + 18;
+
+    heading('Deliveries received');
+    const dl = (moves || []).filter(m => m.movement_type === 'in' && m.supplier);
+    const dRows = dl.map(m => ({ cells: [String(m.created_at).slice(0, 10), m.supplier.name, m.item ? m.item.name : '', Number(m.quantity) + ' ' + (m.item ? m.item.unit : '')] }));
+    if (!dRows.length) dRows.push({ cells: ['No deliveries in this period', '', '', ''] });
+    y = pdfTable(doc, y, [{ label: 'Date', width: 70 }, { label: 'Supplier', width: 170 }, { label: 'Material', width: 170 }, { label: 'Quantity', width: 105 }], dRows) + 18;
+
+    heading('Stock issued / used');
+    const out = (moves || []).filter(m => m.movement_type === 'out');
+    const oRows = out.map(m => ({ cells: [String(m.created_at).slice(0, 10), m.item ? m.item.name : '', Number(m.quantity) + ' ' + (m.item ? m.item.unit : ''), m.issued_to || '', m.used_for || m.reason || ''] }));
+    if (!oRows.length) oRows.push({ cells: ['No stock issued in this period', '', '', '', ''] });
+    y = pdfTable(doc, y, [{ label: 'Date', width: 62 }, { label: 'Material', width: 140 }, { label: 'Quantity', width: 80 }, { label: 'Issued to', width: 105 }, { label: 'Used for / note', width: 128 }], oRows);
+    drawFormFooter(doc, Math.min(y + 14, 800), 'Generated automatically from attendance, transaction and store records.');
+    doc.end();
+  } catch (e) { if (!res.headersSent) res.status(500).send('Could not generate report: ' + e.message); else res.end(); }
+});
+
 app.post('/api/batches', requireAuth, requireRole('clerk', 'admin'), async (req, res) => {
   const { site_id, items } = req.body;
   if (!site_id || !Array.isArray(items) || items.length === 0) {
@@ -2002,6 +2420,7 @@ app.post('/api/transactions/:id/approve/manager', requireAuth, requireRole('mana
   const { data, error } = await supabase.from('cst_transactions').update(updates).eq('id', id).select().single();
   if (error) return res.status(500).json({ error: error.message });
   await supabase.from('cst_approval_log').insert({ transaction_id: id, actor_id: req.user.id, action: 'approve_manager' });
+  audit(req, 'approve_manager', 'transaction', id, null);
 
   if (data.status === 'approved') {
     await notify(data.created_by, id, 'fully_approved', `Your transaction "${data.description}" (KES ${data.amount}) was fully approved and is ready to be paid.`);
@@ -2023,6 +2442,7 @@ app.post('/api/transactions/:id/approve/finance', requireAuth, requireRole('fina
   const { data, error } = await supabase.from('cst_transactions').update(updates).eq('id', id).select().single();
   if (error) return res.status(500).json({ error: error.message });
   await supabase.from('cst_approval_log').insert({ transaction_id: id, actor_id: req.user.id, action: 'approve_finance' });
+  audit(req, 'approve_finance', 'transaction', id, null);
 
   if (data.status === 'approved') {
     await notify(data.created_by, id, 'fully_approved', `Your transaction "${data.description}" (KES ${data.amount}) was fully approved and is ready to be paid.`);
@@ -2046,6 +2466,7 @@ app.post('/api/transactions/:id/reject', requireAuth, requireRole('manager', 'fi
 
   if (error) return res.status(500).json({ error: error.message });
   await supabase.from('cst_approval_log').insert({ transaction_id: id, actor_id: req.user.id, action: 'reject', note: reason || null });
+  audit(req, 'reject_transaction', 'transaction', id, null);
   await notify(data.created_by, id, 'rejected', `Your transaction "${data.description}" (KES ${data.amount}) was rejected.${reason ? ' Reason: ' + reason : ''}`);
   res.json(data);
 });
@@ -2062,6 +2483,7 @@ app.post('/api/transactions/:id/pay', requireAuth, requireRole('finance', 'admin
 
   if (error) return res.status(500).json({ error: error.message });
   await supabase.from('cst_approval_log').insert({ transaction_id: id, actor_id: req.user.id, action: 'mark_paid' });
+  audit(req, 'mark_paid', 'transaction', id, null);
 
   const receiptMsg = `Payment settled for "${data.description}" (KES ${data.amount}). Receipt available.`;
   const recipients = new Set([data.created_by, data.manager_approved_by, data.finance_approved_by].filter(Boolean));
@@ -2091,13 +2513,16 @@ app.put('/api/transactions/:id', requireAuth, requireRole('manager', 'admin'), a
   const { data, error } = await supabase.from('cst_transactions').update(updates).eq('id', id).select().single();
   if (error) return res.status(500).json({ error: error.message });
   if (!data) return res.status(404).json({ error: 'Transaction not found' });
+  audit(req, 'edit_transaction', 'transaction', id, JSON.stringify(updates));
   res.json(data);
 });
 
 app.delete('/api/transactions/:id', requireAuth, requireRole('manager', 'admin'), async (req, res) => {
   const { id } = req.params;
+  const { data: before } = await supabase.from('cst_transactions').select('description, amount, status').eq('id', id).maybeSingle();
   const { error } = await supabase.from('cst_transactions').delete().eq('id', id);
   if (error) return res.status(500).json({ error: error.message });
+  audit(req, 'delete_transaction', 'transaction', id, before ? before.description + ' KES ' + before.amount + ' (' + before.status + ')' : null);
   res.json({ ok: true });
 });
 
@@ -2122,6 +2547,7 @@ app.delete('/api/transactions', requireAuth, requireRole('manager', 'admin', 'su
 
   const { error } = await query;
   if (error) return res.status(500).json({ error: error.message });
+  audit(req, 'clear_all_transactions', 'transaction', null, 'All transaction data was cleared');
   res.json({ ok: true });
 });
 
@@ -2220,6 +2646,7 @@ app.post('/api/users', requireAuth, requireRole('manager', 'admin'), async (req,
     return res.status(500).json({ error: error.message });
   }
   // Return the generated password once — the manager must relay it to the new user.
+  audit(req, 'create_user', 'user', data.id, data.full_name + ' (' + data.role + ')');
   res.status(201).json({ ...data, temporary_password: plainPassword });
 });
 
@@ -2252,6 +2679,7 @@ app.patch('/api/users/:id/status', requireAuth, requireRole('manager', 'admin'),
 
   const { data, error } = await supabase.from('cst_users').update({ is_active }).eq('id', req.params.id).select('id, full_name, email, role, is_active').single();
   if (error) return res.status(500).json({ error: error.message });
+  audit(req, is_active ? 'activate_user' : 'deactivate_user', 'user', req.params.id, target.full_name + ' (' + target.role + ')');
   res.json(data);
 });
 
@@ -2263,6 +2691,7 @@ app.post('/api/users/:id/reset-password', requireAuth, requireRole('manager', 'a
   const plainPassword = randomPassword();
   const { error } = await supabase.from('cst_users').update({ password_hash: bcrypt.hashSync(plainPassword, 10), failed_attempts: 0, locked_until: null }).eq('id', target.id);
   if (error) return res.status(500).json({ error: error.message });
+  audit(req, 'reset_password', 'user', target.id, target.full_name + ' (' + target.role + ')');
   res.json({ id: target.id, email: target.email, full_name: target.full_name, temporary_password: plainPassword });
 });
 
@@ -2419,6 +2848,7 @@ app.post('/api/workers', requireAuth, requireRole('clerk', 'manager', 'admin'), 
     if (error.message.includes('duplicate')) return res.status(409).json({ error: 'A worker with this ID number is already enrolled at this site' });
     return res.status(500).json({ error: error.message });
   }
+  audit(req, 'enroll_worker', 'worker', data.id, data.name + ' (' + data.id_number + ')');
   res.status(201).json(data);
 });
 
@@ -2431,22 +2861,42 @@ app.get('/api/workers', requireAuth, async (req, res) => {
 });
 
 app.delete('/api/workers/:id', requireAuth, requireRole('clerk', 'manager', 'admin'), async (req, res) => {
+  const { data: w } = await supabase.from('cst_workers').select('name, id_number').eq('id', req.params.id).maybeSingle();
   const { error } = await supabase.from('cst_workers').delete().eq('id', req.params.id);
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) {
+    if (/foreign key|violates/i.test(error.message)) return res.status(409).json({ error: 'This worker already has wage payment records, so they cannot be removed.' });
+    return res.status(500).json({ error: error.message });
+  }
+  audit(req, 'remove_worker', 'worker', req.params.id, w ? w.name + ' (' + w.id_number + ')' : null);
   res.json({ ok: true });
 });
 
 app.post('/api/attendance', requireAuth, requireRole('clerk', 'admin'), async (req, res) => {
-  const { attendance_date, worker_ids } = req.body;
-  if (!Array.isArray(worker_ids) || worker_ids.length === 0) return res.status(400).json({ error: 'worker_ids (non-empty array) is required' });
+  const { attendance_date, worker_ids, replace } = req.body;
+  if (!Array.isArray(worker_ids) || (worker_ids.length === 0 && !replace)) return res.status(400).json({ error: 'worker_ids (non-empty array) is required' });
   const site_id = req.user.site_id;
   if (!site_id) return res.status(400).json({ error: 'Your account has no site associated with it' });
   const date = attendance_date || new Date().toISOString().slice(0, 10);
 
-  const rows = worker_ids.map(worker_id => ({ worker_id, site_id, attendance_date: date, submitted_by: req.user.id }));
-  const { data, error } = await supabase.from('cst_attendance').upsert(rows, { onConflict: 'worker_id,attendance_date', ignoreDuplicates: true }).select();
-  if (error) return res.status(500).json({ error: error.message });
-  res.status(201).json({ ok: true, recorded: data.length, date });
+  // Only workers that belong to this site can be marked present.
+  let validIds = [];
+  if (worker_ids.length) {
+    const { data: ws } = await supabase.from('cst_workers').select('id').eq('site_id', site_id).in('id', worker_ids);
+    validIds = (ws || []).map(w => w.id);
+  }
+  if (replace) {
+    const { error: delErr } = await supabase.from('cst_attendance').delete().eq('site_id', site_id).eq('attendance_date', date);
+    if (delErr) return res.status(500).json({ error: delErr.message });
+  }
+  let recorded = 0;
+  if (validIds.length) {
+    const rows = validIds.map(worker_id => ({ worker_id, site_id, attendance_date: date, submitted_by: req.user.id }));
+    const { data, error } = await supabase.from('cst_attendance').upsert(rows, { onConflict: 'worker_id,attendance_date', ignoreDuplicates: true }).select();
+    if (error) return res.status(500).json({ error: error.message });
+    recorded = replace ? validIds.length : data.length;
+  }
+  audit(req, 'record_attendance', 'attendance', null, date + ': ' + validIds.length + ' present' + (replace ? ' (corrected)' : ''));
+  res.status(201).json({ ok: true, recorded, date });
 });
 
 app.get('/api/attendance', requireAuth, async (req, res) => {
@@ -3020,7 +3470,11 @@ app.delete('/api/store/items/:id', requireAuth, requireRole('storekeeper', 'admi
 });
 
 app.post('/api/store/items/:id/movement', requireAuth, requireRole('storekeeper', 'admin'), async (req, res) => {
-  const { movement_type, quantity, reason, supplier_id } = req.body;
+  const { movement_type, quantity, supplier_id } = req.body;
+  let { reason } = req.body;
+  const issued_to = String(req.body.issued_to || '').trim() || null, used_for = String(req.body.used_for || '').trim() || null;
+  if (movement_type === 'out' && !issued_to) return res.status(400).json({ error: 'Say who the stock was issued to' });
+  if (movement_type === 'out') reason = [reason, 'Issued to ' + issued_to, used_for ? 'for ' + used_for : null].filter(Boolean).join(' - ');
   if (!['in', 'out'].includes(movement_type)) return res.status(400).json({ error: 'movement_type must be "in" or "out"' });
   if (req.user.role === 'clerk' && movement_type !== 'in') return res.status(403).json({ error: 'Clerks can only record deliveries (stock in), not stock out' });
   if (!quantity || Number(quantity) <= 0) return res.status(400).json({ error: 'quantity must be greater than 0' });
@@ -3036,7 +3490,8 @@ app.post('/api/store/items/:id/movement', requireAuth, requireRole('storekeeper'
 
   const { data: movement, error: movErr } = await supabase.from('cst_store_movements').insert({
     item_id: item.id, site_id: item.site_id, movement_type, quantity, reason: reason || null, recorded_by: req.user.id,
-    supplier_id: movement_type === 'in' ? (supplier_id || null) : null
+    supplier_id: movement_type === 'in' ? (supplier_id || null) : null,
+    issued_to: movement_type === 'out' ? issued_to : null, used_for: movement_type === 'out' ? used_for : null
   }).select().single();
   if (movErr) return res.status(500).json({ error: movErr.message });
 
@@ -3045,6 +3500,7 @@ app.post('/api/store/items/:id/movement', requireAuth, requireRole('storekeeper'
     for (const r of (recipients || [])) await notify(r.id, null, 'batch_submitted', `Low stock alert: "${item.name}" is down to ${newQty} ${item.unit} (reorder level: ${item.reorder_level}).`);
   }
 
+  audit(req, movement_type === 'out' ? 'stock_out' : 'stock_in', 'store_item', item.id, item.name + ' ' + quantity + ' ' + item.unit + (reason ? ' - ' + reason : ''));
   res.status(201).json({ item: { ...item, quantity_in_stock: newQty }, movement });
 });
 
@@ -3511,9 +3967,8 @@ app.get('/api/ledger.pdf', requireAuth, requireRole(...FIN_ROLES), async (req, r
 // ---------- 2. Supplier statement PDF ----------
 app.get('/api/suppliers/:id/statement.pdf', requireAuth, requireRole(...FIN_ROLES), async (req, res) => {
   try {
-    let vq = supabase.from('cst_vendors').select('*').eq('id', req.params.id);
-    vq = await scopeToSites(vq, req.user);
-    const { data: supplier } = await vq.maybeSingle();
+    const { data: vrows } = await scopeToSites(supabase.from('cst_vendors').select('*').eq('id', req.params.id), req.user);
+    const supplier = vrows && vrows[0];
     if (!supplier) return res.status(404).send('Supplier not found');
 
     const { data: moves } = await supabase.from('cst_store_movements').select('created_at, quantity, reason, item:item_id(name, unit)').eq('supplier_id', supplier.id).eq('movement_type', 'in').order('created_at');
@@ -3600,6 +4055,7 @@ app.put('/api/budget', requireAuth, requireRole('manager', 'admin'), async (req,
     if (!(warn >= 1 && warn <= 100)) return res.status(400).json({ error: 'Warning level must be between 1 and 100' });
     const { error } = await supabase.from('cst_site_budgets').upsert({ site_id: siteId, budget_amount: amount, warn_percent: Math.round(warn), updated_by: req.user.id, updated_at: new Date().toISOString() });
     if (error) return res.status(500).json({ error: error.message });
+    audit(req, 'set_budget', 'budget', siteId, 'Budget set to KES ' + amount + ', warn at ' + Math.round(warn) + '%');
     res.json(await computeBudget(siteId));
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
