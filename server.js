@@ -382,7 +382,7 @@ const appEl = document.getElementById('app');
 const TRUCK_SVG = '<svg width="26" height="26" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="2" y="18" width="24" height="14" rx="2" fill="#1f2d3d"/><path d="M26 22h9l7 7v3a2 2 0 0 1-2 2h-1" stroke="#1f2d3d" stroke-width="2.5" fill="none" stroke-linejoin="round"/><circle cx="13" cy="35" r="4" fill="#173B29" stroke="#1f2d3d" stroke-width="1.5"/><circle cx="34" cy="35" r="4" fill="#173B29" stroke="#1f2d3d" stroke-width="1.5"/></svg>';
 function initials(name){ return (name||'?').split(' ').filter(Boolean).slice(0,2).map(w=>w[0].toUpperCase()).join(''); }
 function save(token, user){ state={token,user}; localStorage.setItem('cst_token',token); localStorage.setItem('cst_user', JSON.stringify(user)); }
-function logout(){ localStorage.removeItem('cst_token'); localStorage.removeItem('cst_user'); state={token:null,user:null}; render(); }
+function logout(){ window.__brandLoaded = false; localStorage.removeItem('cst_token'); localStorage.removeItem('cst_user'); state={token:null,user:null}; render(); }
 async function api(path, opts={}) {
   const res = await fetch(API+path, { ...opts, headers: { 'Content-Type':'application/json', ...(state.token?{Authorization:'Bearer '+state.token}:{}), ...(opts.headers||{}) } });
   if (!res.ok) { const b = await res.json().catch(()=>({})); throw new Error(b.error||'Request failed'); }
@@ -475,6 +475,9 @@ function buildNotificationsHtml(user){
 }
 function buildSettingsHtml(user){
   let html = '<div class="card"><h2>Change password</h2><div class="row"><div><label>Current password</label><input id="curPw" type="password" /></div><div><label>New password</label><input id="newPw" type="password" /></div></div><div style="margin-top:12px;"><button id="changePwBtn">Update password</button></div><div class="error" id="changePwErr"></div><div id="changePwOk" class="muted"></div></div>';
+  if ((user.role==='manager' || user.role==='admin') && user.organization_id) {
+    html += '<div class="card"><h2>Company logo</h2><p class="muted">Your logo appears in the menu and on every PDF form, report and receipt. Use a square PNG or JPG under 2 MB.</p><div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;"><div id="logoPreview" style="width:72px;height:72px;border-radius:12px;background:#eee;display:flex;align-items:center;justify-content:center;color:#999;font-size:12px;overflow:hidden;">No logo</div><div><input id="logoFile" type="file" accept="image/png,image/jpeg" /><div style="margin-top:8px;"><button id="uploadLogoBtn">Upload logo</button></div></div></div><div class="error" id="logoErr"></div><div class="muted" id="logoOk"></div></div>';
+  }
   if (user.role==='manager' || user.role==='admin') {
     html += '<div class="card"><h2>Add a team login</h2><div class="row"><div><label>Full name</label><input id="new_name" placeholder="Full name" /></div><div><label>Email</label><input id="new_email" type="email" placeholder="person@example.com" /></div><div><label>Role</label><select id="new_role"><option value="clerk">Clerk</option><option value="finance">Finance</option><option value="storekeeper">Storekeeper</option></select></div></div><div style="margin-top:12px;"><button id="createUserBtn">Create login</button></div><div class="error" id="createUserErr"></div><div id="createUserResult"></div></div>';
     html += '<div class="card"><h2>Team logins</h2><div id="userList"><div class="skeleton" style="width:85%;"></div><div class="skeleton" style="width:60%;"></div></div></div>';
@@ -581,9 +584,22 @@ async function loadOrganizations(){
         '<div style="flex:1;"><strong>'+o.name+'</strong>'+(o.is_active===false?' <span class="badge rejected">inactive</span>':' <span class="badge paid">active</span>')+
         '<div class="muted">'+(o.contact_email||'')+(o.contact_phone?' · '+o.contact_phone:'')+'</div>' +
         '<div class="muted">'+o.site_count+' site(s) · '+o.user_count+' user(s)</div></div>' +
+        '<label class="secondary" style="cursor:pointer;padding:8px 12px;border-radius:8px;border:1px solid #ccc;font-size:13px;margin-right:6px;">Change logo<input type="file" accept="image/png,image/jpeg" data-logo-org="'+o.id+'" style="display:none;" /></label>' +
         '<button class="'+(o.is_active===false?'success':'danger')+'" data-toggle-org="'+o.id+'" data-next="'+(o.is_active===false?'true':'false')+'">'+(o.is_active===false?'Activate':'Deactivate')+'</button>' +
       '</div>'
     ).join('');
+    el.querySelectorAll('[data-logo-org]').forEach(inp => {
+      inp.onchange = async () => {
+        if (!inp.files[0]) return;
+        const fd = new FormData(); fd.append('logo', inp.files[0]);
+        try {
+          const res = await fetch(API+'/superadmin/organizations/'+inp.dataset.logoOrg+'/logo', { method:'POST', headers:{Authorization:'Bearer '+state.token}, body: fd });
+          const b = await res.json().catch(()=>({}));
+          if (!res.ok) throw new Error(b.error || 'Upload failed');
+          loadOrganizations();
+        } catch(e) { alert(e.message); }
+      };
+    });
     el.querySelectorAll('[data-toggle-org]').forEach(btn => {
       btn.onclick = async () => {
         try { await api('/superadmin/organizations/'+btn.dataset.toggleOrg+'/status', {method:'PATCH', body: JSON.stringify({is_active: btn.dataset.next==='true'})}); loadOrganizations(); }
@@ -655,6 +671,30 @@ async function renderDashboard(){
     if (document.getElementById('queuePending')) loadApprovalQueues();
     if (document.getElementById('notifList')) loadNotifications();
     if (document.getElementById('userList')) loadUsers();
+    if (document.getElementById('uploadLogoBtn')) {
+      (async () => {
+        try { const o = await api('/organization'); if (o.logo_url) document.getElementById('logoPreview').innerHTML = '<img src="'+o.logo_url+'" style="width:100%;height:100%;object-fit:cover;" />'; } catch(e){}
+      })();
+      document.getElementById('uploadLogoBtn').onclick = async () => {
+        const f = document.getElementById('logoFile').files[0];
+        const err = document.getElementById('logoErr'), ok = document.getElementById('logoOk');
+        err.textContent = ''; ok.textContent = '';
+        if (!f) { err.textContent = 'Choose an image first.'; return; }
+        const fd = new FormData(); fd.append('logo', f);
+        try {
+          const res = await fetch(API+'/organization/logo', { method:'POST', headers:{Authorization:'Bearer '+state.token}, body: fd });
+          const b = await res.json().catch(()=>({}));
+          if (!res.ok) throw new Error(b.error || 'Upload failed');
+          document.getElementById('logoPreview').innerHTML = '<img src="'+b.logo_url+'" style="width:100%;height:100%;object-fit:cover;" />';
+          const bl = document.querySelector('.sidebar .brand-logo'); if (bl) bl.innerHTML = '<img src="'+b.logo_url+'" style="width:100%;height:100%;object-fit:cover;border-radius:50%;" />';
+          ok.textContent = 'Logo updated. It will appear on new PDFs and receipts.';
+        } catch(e) { err.textContent = e.message; }
+      };
+    }
+    if (document.getElementById('sidebar') && state.user.organization_id && !window.__brandLoaded) {
+      window.__brandLoaded = true;
+      api('/organization').then(o => { const bl = document.querySelector('.sidebar .brand-logo'); if (o.logo_url && bl) bl.innerHTML = '<img src="'+o.logo_url+'" style="width:100%;height:100%;object-fit:cover;border-radius:50%;" />'; }).catch(()=>{});
+    }
     if (document.getElementById('storeList')) loadStoreItems();
     if (document.getElementById('recordDeliveryBtn')) {
       (async () => {
@@ -3128,6 +3168,45 @@ app.get('/api/superadmin/organizations', requireAuth, requireRole('superadmin'),
     return { ...o, site_count: siteCount || 0, user_count: userCount || 0 };
   }));
   res.json(withCounts);
+});
+
+// ---------- Company logo (upload / replace) ----------
+async function storeOrgLogo(file) {
+  const okTypes = ['image/png', 'image/jpeg'];
+  if (!file) throw new Error('Choose a logo image first');
+  if (!okTypes.includes(file.mimetype)) throw new Error('Logo must be a PNG or JPG image');
+  if (file.size > 2 * 1024 * 1024) throw new Error('Logo must be smaller than 2 MB');
+  const safeName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const path = `${Date.now()}-${safeName}`;
+  const { error: upErr } = await supabase.storage.from('org-logos').upload(path, file.buffer, { contentType: file.mimetype });
+  if (upErr) throw new Error('Logo upload failed: ' + upErr.message);
+  return supabase.storage.from('org-logos').getPublicUrl(path).data.publicUrl;
+}
+
+app.get('/api/organization', requireAuth, async (req, res) => {
+  if (!req.user.organization_id) return res.json({ id: null, name: null, logo_url: null });
+  const { data, error } = await supabase.from('cst_organizations').select('id, name, logo_url').eq('id', req.user.organization_id).single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+app.post('/api/organization/logo', requireAuth, requireRole('manager', 'admin'), upload.single('logo'), async (req, res) => {
+  if (!req.user.organization_id) return res.status(400).json({ error: 'Your account is not linked to a company' });
+  try {
+    const logo_url = await storeOrgLogo(req.file);
+    const { error } = await supabase.from('cst_organizations').update({ logo_url }).eq('id', req.user.organization_id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ logo_url });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.post('/api/superadmin/organizations/:id/logo', requireAuth, requireRole('superadmin'), upload.single('logo'), async (req, res) => {
+  try {
+    const logo_url = await storeOrgLogo(req.file);
+    const { data, error } = await supabase.from('cst_organizations').update({ logo_url }).eq('id', req.params.id).select('id').single();
+    if (error || !data) return res.status(404).json({ error: 'Company not found' });
+    res.json({ logo_url });
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 app.post('/api/superadmin/organizations', requireAuth, requireRole('superadmin'), upload.single('logo'), async (req, res) => {
