@@ -222,6 +222,14 @@ const INDEX_HTML = `<!DOCTYPE html>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Site Transactions</title>
+<link rel="manifest" href="/manifest.webmanifest" />
+<meta name="theme-color" content="#173B29" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-title" content="Site Transactions" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+<link rel="icon" type="image/png" href="/icon-192.png" />
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
@@ -345,6 +353,29 @@ tbody tr{transition:background .12s ease;} tbody tr:hover{background:#f5f9f6;}
 <body>
 <div id="app"></div>
 <script>
+// ----- Install as an app (PWA) -----
+var deferredInstall = null;
+if ('serviceWorker' in navigator) { window.addEventListener('load', function(){ navigator.serviceWorker.register('/sw.js').catch(function(){}); }); }
+function isStandalone(){ return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true; }
+function showInstallBar(){
+  if (isStandalone() || document.getElementById('installBar')) return;
+  try { if (localStorage.getItem('installDismissed') === '1') return; } catch(e){}
+  var isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  if (!deferredInstall && !isIOS) return;
+  var bar = document.createElement('div');
+  bar.id = 'installBar';
+  bar.style.cssText = 'position:fixed;left:12px;right:12px;bottom:12px;z-index:9999;background:#173B29;color:#fff;border-radius:14px;padding:12px 14px;display:flex;align-items:center;gap:10px;box-shadow:0 8px 24px rgba(0,0,0,.3);font:500 14px Inter,system-ui,sans-serif;';
+  bar.innerHTML = '<div style="flex:1;">' + (deferredInstall ? 'Install Site Transactions on your phone for quick access.' : 'To install: tap the Share button, then \\"Add to Home Screen\\".') + '</div>' +
+    (deferredInstall ? '<button id="installBtn" style="background:#2f9e5c;color:#fff;border:0;border-radius:10px;padding:9px 14px;font-weight:600;">Install</button>' : '') +
+    '<button id="installClose" aria-label="Close" style="background:transparent;color:#cfe3d6;border:0;font-size:20px;">&times;</button>';
+  document.body.appendChild(bar);
+  document.getElementById('installClose').onclick = function(){ bar.remove(); try { localStorage.setItem('installDismissed','1'); } catch(e){} };
+  var b = document.getElementById('installBtn');
+  if (b) b.onclick = function(){ deferredInstall.prompt(); deferredInstall.userChoice.then(function(){ deferredInstall = null; bar.remove(); }); };
+}
+window.addEventListener('beforeinstallprompt', function(e){ e.preventDefault(); deferredInstall = e; showInstallBar(); });
+window.addEventListener('appinstalled', function(){ var b = document.getElementById('installBar'); if (b) b.remove(); });
+window.addEventListener('load', function(){ setTimeout(showInstallBar, 2500); });
 const API = '/api';
 let state = { token: localStorage.getItem('cst_token'), user: JSON.parse(localStorage.getItem('cst_user') || 'null') };
 const appEl = document.getElementById('app');
@@ -375,13 +406,14 @@ function renderLogin(){
       '</div></div>' +
       '<div class="auth-card-wrap"><div class="auth-card">' +
         '<h2>Sign in</h2><p class="muted">Use the credentials your manager gave you.</p>' +
-        '<div class="auth-field"><label>Email</label><input id="email" type="email" placeholder="you@example.com" /></div>' +
-        '<div class="auth-field"><label>Password</label><input id="password" type="password" placeholder="********" /></div>' +
+        '<div class="auth-field"><label>Email</label><input id="email" type="email" placeholder="you@example.com" autocapitalize="none" autocorrect="off" spellcheck="false" autocomplete="username" /></div>' +
+        '<div class="auth-field"><label>Password</label><input id="password" type="password" placeholder="********" autocapitalize="none" autocomplete="current-password" /><label style="display:flex;gap:6px;align-items:center;font-size:13px;margin-top:6px;"><input type="checkbox" id="showPw" style="width:auto;" /> Show password</label></div>' +
         '<button class="auth-submit" id="loginBtn">Log in</button>' +
         '<a href="#" id="forgotLink" class="auth-forgot">Forgot password?</a>' +
         '<div class="error" id="err"></div><div class="muted" id="forgotMsg"></div>' +
       '</div></div>' +
     '</div>';
+  document.getElementById('showPw').onchange = function(){ document.getElementById('password').type = this.checked ? 'text' : 'password'; };
   document.getElementById('loginBtn').onclick = async () => {
     const email = document.getElementById('email').value.trim();
     const password = document.getElementById('password').value;
@@ -1451,6 +1483,116 @@ render();
 </script>
 </body>
 </html>`;
+
+// ---------- Installable app (PWA) ----------
+const zlib = require('zlib');
+const CRC_TABLE = (() => { const t = []; for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+function crc32(buf) { let c = 0xffffffff; for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; }
+function pngChunk(type, data) {
+  const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
+  const td = Buffer.concat([Buffer.from(type), data]);
+  const crc = Buffer.alloc(4); crc.writeUInt32BE(crc32(td));
+  return Buffer.concat([len, td, crc]);
+}
+// Draws a green rounded tile with a white tipper-truck mark, as a PNG (no image libraries needed).
+function makeIconPng(size, maskable) {
+  const px = Buffer.alloc(size * size * 4);
+  const inRect = (x, y, x0, y0, x1, y1) => x >= x0 && x <= x1 && y >= y0 && y <= y1;
+  const inCircle = (x, y, cx, cy, r) => (x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r;
+  const scale = maskable ? 0.72 : 1; // keep the mark inside the safe zone for maskable icons
+  for (let j = 0; j < size; j++) for (let i = 0; i < size; i++) {
+    const u = i / size, v = j / size;
+    // background (rounded square, or full-bleed when maskable)
+    let bg = true;
+    if (!maskable) {
+      const r = 0.18, cx = Math.min(Math.max(u, r), 1 - r), cy = Math.min(Math.max(v, r), 1 - r);
+      bg = (u - cx) * (u - cx) + (v - cy) * (v - cy) <= r * r;
+    }
+    let rgba = [0, 0, 0, 0];
+    if (bg) {
+      rgba = [23, 59, 41, 255];
+      const x = (u - 0.5) / scale + 0.5, y = (v - 0.5) / scale + 0.5;
+      const body = inRect(x, y, 0.16, 0.36, 0.58, 0.64);
+      const cab = inRect(x, y, 0.60, 0.46, 0.84, 0.64) || (inRect(x, y, 0.60, 0.46, 0.70, 0.64));
+      const win = inRect(x, y, 0.68, 0.50, 0.78, 0.56);
+      const wheel = inCircle(x, y, 0.30, 0.68, 0.075) || inCircle(x, y, 0.70, 0.68, 0.075);
+      const hub = inCircle(x, y, 0.30, 0.68, 0.03) || inCircle(x, y, 0.70, 0.68, 0.03);
+      if (wheel) rgba = [255, 255, 255, 255];
+      if (hub) rgba = [47, 158, 92, 255];
+      if (body || cab) rgba = [255, 255, 255, 255];
+      if (win) rgba = [47, 158, 92, 255];
+    }
+    const o = (j * size + i) * 4; px[o] = rgba[0]; px[o + 1] = rgba[1]; px[o + 2] = rgba[2]; px[o + 3] = rgba[3];
+  }
+  const raw = Buffer.alloc((size * 4 + 1) * size);
+  for (let j = 0; j < size; j++) { raw[j * (size * 4 + 1)] = 0; px.copy(raw, j * (size * 4 + 1) + 1, j * size * 4, (j + 1) * size * 4); }
+  const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(size, 0); ihdr.writeUInt32BE(size, 4); ihdr[8] = 8; ihdr[9] = 6;
+  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), pngChunk('IHDR', ihdr), pngChunk('IDAT', zlib.deflateSync(raw)), pngChunk('IEND', Buffer.alloc(0))]);
+}
+const ICON_CACHE = {};
+function sendIcon(res, size, maskable) {
+  const key = size + (maskable ? 'm' : '');
+  if (!ICON_CACHE[key]) ICON_CACHE[key] = makeIconPng(size, maskable);
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  res.type('png').send(ICON_CACHE[key]);
+}
+app.get('/icon-192.png', (req, res) => sendIcon(res, 192, false));
+app.get('/icon-512.png', (req, res) => sendIcon(res, 512, false));
+app.get('/icon-maskable-512.png', (req, res) => sendIcon(res, 512, true));
+app.get('/apple-touch-icon.png', (req, res) => sendIcon(res, 180, true));
+app.get('/favicon.ico', (req, res) => sendIcon(res, 192, false));
+
+app.get('/manifest.webmanifest', (req, res) => {
+  res.setHeader('Cache-Control', 'public, max-age=3600');
+  res.type('application/manifest+json').send(JSON.stringify({
+    name: 'Site Transactions',
+    short_name: 'SiteTx',
+    description: 'Construction site expenses, store, workers and wages.',
+    id: '/',
+    start_url: '/',
+    scope: '/',
+    display: 'standalone',
+    orientation: 'portrait',
+    background_color: '#173B29',
+    theme_color: '#173B29',
+    icons: [
+      { src: '/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+      { src: '/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+      { src: '/icon-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' }
+    ]
+  }));
+});
+
+// Service worker: keeps the app shell available with no network; API calls and PDFs always go to the server.
+const SW_JS = `
+const CACHE = 'sitetx-shell-v1';
+self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.add('/')).then(() => self.skipWaiting())); });
+self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
+self.addEventListener('fetch', e => {
+  const req = e.request, url = new URL(req.url);
+  if (req.method !== 'GET' || url.origin !== location.origin || url.pathname.startsWith('/api/')) return;
+  if (req.mode === 'navigate') {
+    e.respondWith(fetch(req).then(r => { const copy = r.clone(); if (r.ok && url.pathname === '/') caches.open(CACHE).then(c => c.put('/', copy)); return r; }).catch(() => caches.match('/').then(r => r || new Response('You are offline. Reconnect and reopen the app.', { status: 503, headers: { 'Content-Type': 'text/plain' } }))));
+    return;
+  }
+  if (/^\\/(icon-|apple-touch|manifest)/.test(url.pathname)) {
+    e.respondWith(caches.match(req).then(r => r || fetch(req).then(res => { const copy = res.clone(); caches.open(CACHE).then(c => c.put(req, copy)); return res; })));
+  }
+});
+`;
+app.get('/sw.js', (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Service-Worker-Allowed', '/');
+  res.type('application/javascript').send(SW_JS);
+});
+
+// Basic security headers
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'same-origin');
+  next();
+});
 
 app.get('/', (req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
