@@ -444,7 +444,7 @@ function buildTransactionsHtml(user){
   let html = '';
   html += '<div class="card"><h2>Offline form</h2><p class="muted">No network on site? Download a blank printable form, fill it by hand, and enter it into the app (or upload a photo below) once you\\'re back online.</p><button class="secondary" id="downloadFormBtn">Download blank form (PDF)</button></div>';
   if (user.role==='clerk' || user.role==='admin') {
-    html += '<div class="card"><h2>Log transactions</h2><p class="muted">Add materials, labor, fuel, etc. as separate line items, then submit them together — the total goes to your manager and finance in one notification.</p><div class="row"><div><label>Site ID</label><input id="site_id" placeholder="site UUID" value="'+(user.site_id||'')+'" /></div></div><div id="itemRows"></div><div style="margin-top:8px;"><button class="secondary" id="addItemBtn" type="button">+ Add item</button></div><div class="topbar" style="margin-top:14px;"><strong>Total: <span id="batchTotal">KES 0.00</span></strong><button id="submitBatch">Submit all</button></div><div class="error" id="submitErr"></div></div>';
+    html += '<div class="card"><h2>Log transactions</h2><p class="muted">Add materials, labor, fuel, etc. as separate line items, then submit them together — the total goes to your manager and finance in one notification.</p>'+(user.site_id ? '<input id="site_id" type="hidden" value="'+user.site_id+'" />' : '<div class="row"><div><label>Site ID</label><input id="site_id" placeholder="site UUID" /></div></div>')+'<div id="itemRows"></div><div style="margin-top:8px;"><button class="secondary" id="addItemBtn" type="button">+ Add item</button></div><div class="topbar" style="margin-top:14px;"><strong>Total: <span id="batchTotal">KES 0.00</span></strong><button id="submitBatch">Submit all</button></div><div class="error" id="submitErr"></div></div>';
   }
   html += '<div class="card"><div class="topbar"><h2>Transactions</h2><div>'+(['manager','finance','admin'].includes(user.role)?'<button id="exportBtn" class="secondary">Download Excel</button>':'')+(['manager','admin'].includes(user.role)?' <button id="clearAllBtn" class="danger">Clear all data</button>':'')+'</div></div>' +
     '<div class="row" style="margin-top:6px;"><input id="filterSearch" placeholder="Search description..." /><select id="filterStatus"><option value="">All statuses</option><option value="pending">Pending</option><option value="approved">Approved</option><option value="paid">Paid</option><option value="rejected">Rejected</option></select><input id="filterFrom" type="date" /><input id="filterTo" type="date" /><button class="secondary" id="filterApply">Filter</button></div>' +
@@ -1456,8 +1456,15 @@ async function loadUsers(){
     const users = await api('/users');
     if (!users.length) { el.textContent = 'No team logins yet.'; return; }
     el.innerHTML = '<table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead><tbody>' +
-      users.map(u => '<tr><td>'+u.full_name+'</td><td>'+u.email+'</td><td style="text-transform:capitalize;">'+u.role+'</td><td>'+(u.is_active===false?'<span class="badge rejected">inactive</span>':'<span class="badge paid">active</span>')+'</td><td class="actions">'+(u.id!==state.user.id?'<button class="'+(u.is_active===false?'success':'danger')+'" data-toggle-user="'+u.id+'" data-next="'+(u.is_active===false?'true':'false')+'">'+(u.is_active===false?'Activate':'Deactivate')+'</button>':'<span class="muted">you</span>')+'</td></tr>').join('') +
+      users.map(u => '<tr><td>'+u.full_name+'</td><td>'+u.email+'</td><td style="text-transform:capitalize;">'+u.role+'</td><td>'+(u.is_active===false?'<span class="badge rejected">inactive</span>':'<span class="badge paid">active</span>')+'</td><td class="actions">'+(u.id!==state.user.id?'<button class="secondary" data-reset-user="'+u.id+'">Reset password</button> <button class="'+(u.is_active===false?'success':'danger')+'" data-toggle-user="'+u.id+'" data-next="'+(u.is_active===false?'true':'false')+'">'+(u.is_active===false?'Activate':'Deactivate')+'</button>':'<span class="muted">you</span>')+'</td></tr>').join('') +
       '</tbody></table>';
+    el.querySelectorAll('[data-reset-user]').forEach(btn => {
+      btn.onclick = async () => {
+        if (!confirm('Reset this person\\'s password? A new temporary password will be shown once.')) return;
+        try { const r = await api('/users/'+btn.dataset.resetUser+'/reset-password', {method:'POST'}); alert('New temporary password for '+r.email+':\\n\\n'+r.temporary_password+'\\n\\nGive it to them; they can change it in Settings.'); }
+        catch(e){ alert(e.message); }
+      };
+    });
     el.querySelectorAll('[data-toggle-user]').forEach(btn => {
       btn.onclick = async () => {
         try { await api('/users/'+btn.dataset.toggleUser+'/status', {method:'PATCH', body: JSON.stringify({is_active: btn.dataset.next==='true'})}); loadUsers(); }
@@ -2072,15 +2079,39 @@ app.get('/api/users', requireAuth, requireRole('manager', 'finance', 'admin'), a
   res.json(data);
 });
 
+// Loads a user the caller is allowed to manage (same site/organisation); null if not allowed.
+async function getManageableUser(req, id) {
+  const { data: target } = await supabase.from('cst_users').select('id, full_name, email, role, site_id, organization_id, is_active').eq('id', id).single();
+  if (!target) return null;
+  if (req.user.role === 'admin') {
+    if ((target.organization_id || null) !== (req.user.organization_id || null)) return null;
+  } else {
+    if (target.site_id !== req.user.site_id || ['manager', 'admin', 'superadmin'].includes(target.role)) return null;
+  }
+  return target;
+}
+
 app.patch('/api/users/:id/status', requireAuth, requireRole('manager', 'admin'), async (req, res) => {
   const { is_active } = req.body;
   if (typeof is_active !== 'boolean') return res.status(400).json({ error: 'is_active (boolean) is required' });
   if (req.params.id === req.user.id) return res.status(400).json({ error: "You can't deactivate your own account" });
+  const target = await getManageableUser(req, req.params.id);
+  if (!target) return res.status(404).json({ error: 'User not found' });
 
   const { data, error } = await supabase.from('cst_users').update({ is_active }).eq('id', req.params.id).select('id, full_name, email, role, is_active').single();
   if (error) return res.status(500).json({ error: error.message });
-  if (!data) return res.status(404).json({ error: 'User not found' });
   res.json(data);
+});
+
+// Manager/admin resets a team member's password and unlocks the account; the new temporary password is shown once.
+app.post('/api/users/:id/reset-password', requireAuth, requireRole('manager', 'admin'), async (req, res) => {
+  if (req.params.id === req.user.id) return res.status(400).json({ error: 'Use Settings > Change password for your own account' });
+  const target = await getManageableUser(req, req.params.id);
+  if (!target) return res.status(404).json({ error: 'User not found' });
+  const plainPassword = randomPassword();
+  const { error } = await supabase.from('cst_users').update({ password_hash: bcrypt.hashSync(plainPassword, 10), failed_attempts: 0, locked_until: null }).eq('id', target.id);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ id: target.id, email: target.email, full_name: target.full_name, temporary_password: plainPassword });
 });
 
 // ---------- Notifications (in-app + real email via Resend) ----------
